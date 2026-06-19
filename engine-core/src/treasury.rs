@@ -8,7 +8,8 @@
 //!   SNAP:<id>       → TreasurySnapshot indexed by ID
 //!   SNAP:LATEST     → Most recent snapshot ID
 
-use soroban_sdk::{contracterror, panic_with_error, symbol_short, BytesN, Bytes, Env, Map, String, Symbol, Vec};
+use soroban_sdk::{contracterror, panic_with_error, symbol_short, BytesN, Bytes, Env, Map, String, Symbol, Vec, Val};
+use crate::event_utils::publish_event;
 
 use crate::types::TreasurySnapshot;
 
@@ -70,6 +71,13 @@ pub fn record_snapshot(
         (symbol_short!("TRE"), symbol_short!("snapshot")),
         snapshot_id,
     );
+    // Emit structured Event for treasury snapshot
+    let mut payload = Map::new(env);
+    payload.set(Symbol::short("id"), snapshot_id.into());
+    payload.set(Symbol::short("balance"), total_balance.into());
+    payload.set(Symbol::short("accounts"), account_count.into());
+    payload.set(Symbol::short("ledger"), env.ledger().sequence().into());
+    publish_event(env, BytesN::from_array(env, &[0u8; 32]), BytesN::from_array(env, &[0u8; 32]), payload);
 
     snapshot_id
 }

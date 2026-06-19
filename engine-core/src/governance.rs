@@ -11,8 +11,9 @@
 //! Invalid transitions trigger contract panics.
 
 use soroban_sdk::{
-    contracterror, panic_with_error, symbol_short, token, vec, Address, Env, Map, Symbol, Vec,
+    contracterror, panic_with_error, symbol_short, token, vec, Address, Env, Map, Symbol, BytesN, Vec, Val,
 };
+use crate::event_utils::publish_event;
 
 use crate::types::{Proposal, ProposalState};
 
@@ -75,10 +76,15 @@ pub fn propose(env: &Env, mut proposal: Proposal) -> u64 {
     let unlock_ledger = env.ledger().sequence() + TIMELOCK_LEDGERS;
     props.set(proposal.id, (proposal.clone(), unlock_ledger));
     env.storage().instance().set(&KEY_PROPOSALS, &props);
+    // Emit raw event for proposal creation
     env.events().publish(
         (symbol_short!("GOV"), symbol_short!("propose")),
         proposal.id,
     );
+    // Emit structured event for proposal creation
+    let mut payload = Map::new(env);
+    payload.set(Symbol::short("proposal_id"), proposal.id.into());
+    publish_event(env, BytesN::from_array(env, &[0u8; 32]), BytesN::from_array(env, &[0u8; 32]), payload);
     proposal.id
 }
 
@@ -121,10 +127,15 @@ pub fn approve(env: &Env, signer: &Address, proposal_id: u64) {
     // Transition to Approved when count threshold is met
     if prop.approved_by.len() >= threshold {
         prop.state = ProposalState::Approved;
+        // Emit raw event for proposal approval
         env.events().publish(
             (symbol_short!("GOV"), symbol_short!("approved")),
             proposal_id,
         );
+        // Emit structured event for proposal approval
+        let mut payload = Map::new(env);
+        payload.set(Symbol::short("proposal_id"), proposal_id.into());
+        publish_event(env, BytesN::from_array(env, &[0u8; 32]), BytesN::from_array(env, &[0u8; 32]), payload);
     }
     
     props.set(proposal_id, (prop, unlock));
@@ -155,6 +166,9 @@ pub fn execute(env: &Env, proposal_id: u64) -> Proposal {
         (symbol_short!("GOV"), symbol_short!("execute")),
         proposal_id,
     );
+    // Emit structured event for proposal execution
+    let mut payload = Map::new(env);
+    payload.set(Symbol::short("proposal_id"), proposal_id.into());
+    publish_event(env, BytesN::from_array(env, &[0u8; 32]), BytesN::from_array(env, &[0u8; 32]), payload);
     prop
 }
-

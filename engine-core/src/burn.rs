@@ -3,7 +3,7 @@
 //! Prevents burning/transferring funds to the zero address.
 //! Wire `reject_zero_address` into any burn or irreversible-transfer entrypoint.
 
-use soroban_sdk::{contracterror, panic_with_error, symbol_short, Address, Env, String};
+use soroban_sdk::{contracterror, panic_with_error, symbol_short, Address, Env, String, BytesN, Map, Val};
 
 #[contracterror]
 #[derive(Copy, Clone)]
@@ -30,6 +30,11 @@ pub fn burn_to(env: &Env, to: &Address, amount: i128) {
         (symbol_short!("TRE"), symbol_short!("burn_safe")),
         (to.clone(), amount),
     );
+    // Emit structured Event for burn safety
+    let mut payload = Map::new(env);
+    payload.set(Symbol::short("to"), to.clone().into());
+    payload.set(Symbol::short("amount"), amount.into());
+    publish_event(env, BytesN::from_array(env, & [0u8; 32]), BytesN::from_array(env, & [0u8; 32]), payload);
 }
 
 #[cfg(test)]
