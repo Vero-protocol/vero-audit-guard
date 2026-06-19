@@ -6,6 +6,7 @@
 import { execSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
+import { Keypair } from "@stellar/stellar-sdk";
 
 export interface PRData {
   pull_request: {
@@ -30,6 +31,9 @@ export interface PRData {
     current_version: string;
     latest_version: string;
   }>;
+  relayer?: string;
+  signature?: string;
+  timestamp?: number;
 }
 
 export interface PolicyViolation {
@@ -83,16 +87,39 @@ export class PolicyEngine {
    * Evaluate PR data against policies
    */
   async evaluate(prData: PRData): Promise<EvaluationResult> {
+    const signatureViolations = this.verifyRelayerSignature(prData);
+
+    let result: EvaluationResult;
     if (!this.opaAvailable) {
-      return this.evaluateWithoutOPA(prData);
+      result = await this.evaluateWithoutOPA(prData);
+    } else {
+      try {
+        result = await this.evaluateWithOPA(prData);
+      } catch (error) {
+        console.error("[PolicyEngine] OPA evaluation failed:", error);
+        result = await this.evaluateWithoutOPA(prData);
+      }
     }
 
-    try {
-      return await this.evaluateWithOPA(prData);
-    } catch (error) {
-      console.error("[PolicyEngine] OPA evaluation failed:", error);
-      return this.evaluateWithoutOPA(prData);
+    // Merge signature violations if any
+    if (signatureViolations.length > 0) {
+      result.violations = [...signatureViolations, ...result.violations];
+      result.violations_count = result.violations.length;
+      result.status = "NON_COMPLIANT";
+
+      const highSev = signatureViolations.filter(
+        v => v.severity === "CRITICAL" || v.severity === "HIGH"
+      );
+      result.high_severity_violations = [...highSev, ...result.high_severity_violations];
+
+      if (result.summary.startsWith("✅")) {
+        result.summary = `❌ ${signatureViolations.length} signature violation(s)`;
+      } else {
+        result.summary = `❌ ${signatureViolations.length} signature violation(s), ${result.summary}`;
+      }
     }
+
+    return result;
   }
 
   /**
@@ -353,6 +380,100 @@ export class PolicyEngine {
     }
 
     return report;
+  }
+
+  /**
+   * Verify the relayer signature and timestamp
+   */
+  private verifyRelayerSignature(prData: PRData): PolicyViolation[] {
+    const violations: PolicyViolation[] = [];
+
+    // 1. Check if signature fields are present
+    if (!prData.relayer || !prData.signature || !prData.timestamp) {
+      violations.push({
+        rule: "RELAYER_SIGNATURE_MISSING",
+        severity: "CRITICAL",
+        message: "❌ Relayer signature missing",
+        detail: "PR data must be signed by an authorized relayer",
+      });
+      return violations;
+    }
+
+    // 2. Check if relayer is authorized
+    const authorizedRelayers = (process.env.AUTHORIZED_ADDRESSES || "").split(",").filter(Boolean);
+    if (authorizedRelayers.length === 0) {
+      violations.push({
+        rule: "RELAYER_UNAUTHORIZED",
+        severity: "CRITICAL",
+        message: "❌ Relayer not authorized",
+        detail: "No authorized relayers configured in AUTHORIZED_ADDRESSES environment variable",
+      });
+    } else if (!authorizedRelayers.includes(prData.relayer)) {
+      violations.push({
+        rule: "RELAYER_UNAUTHORIZED",
+        severity: "CRITICAL",
+        message: "❌ Relayer not authorized",
+        detail: `The relayer address '${prData.relayer}' is not in the authorized set`,
+      });
+    }
+
+    // 3. Check timestamp (5-minute window)
+    const FIVE_MINUTES_MS = 5 * 60 * 1000;
+    const now = Date.now();
+    if (Math.abs(now - prData.timestamp) > FIVE_MINUTES_MS) {
+      violations.push({
+        rule: "RELAYER_SIGNATURE_EXPIRED",
+        severity: "CRITICAL",
+        message: "❌ Relayer signature expired",
+        detail: `Signature timestamp (${new Date(prData.timestamp).toISOString()}) is outside the 5-minute window`,
+      });
+    }
+
+    // 4. Verify cryptographic signature
+    try {
+      const payload = this.getSignaturePayload(prData);
+      const keypair = Keypair.fromPublicKey(prData.relayer);
+      const isValid = keypair.verify(Buffer.from(payload), Buffer.from(prData.signature, "hex"));
+
+      if (!isValid) {
+        violations.push({
+          rule: "RELAYER_SIGNATURE_INVALID",
+          severity: "CRITICAL",
+          message: "❌ Invalid relayer signature",
+          detail: "The cryptographic signature does not match the PR data payload",
+        });
+      }
+    } catch (e) {
+      violations.push({
+        rule: "RELAYER_SIGNATURE_INVALID",
+        severity: "CRITICAL",
+        message: "❌ Invalid relayer signature",
+        detail: `Signature verification failed: ${(e as Error).message}`,
+      });
+    }
+
+    return violations;
+  }
+
+  /**
+   * Get the payload used for signature verification
+   */
+  private getSignaturePayload(prData: PRData): string {
+    // Create a stable copy of prData without signature fields
+    const payloadData = {
+      pull_request: prData.pull_request,
+      files_modified: prData.files_modified,
+      additions: prData.additions,
+      deletions: prData.deletions,
+      dependencies_added: prData.dependencies_added,
+      dependencies_updated: prData.dependencies_updated,
+      relayer: prData.relayer,
+      timestamp: prData.timestamp,
+    };
+
+    // Use deterministic stringification
+    // Note: For production use, a library like 'fast-json-stable-stringify' is recommended.
+    return JSON.stringify(payloadData);
   }
 }
 

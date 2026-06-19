@@ -3,17 +3,47 @@
  */
 
 import PolicyEngine, { PRData } from "../src/policy-engine";
+import { Keypair } from "@stellar/stellar-sdk";
 
 describe("PolicyEngine", () => {
   let engine: PolicyEngine;
+  const authorizedRelayer = Keypair.random();
 
   beforeEach(() => {
     engine = new PolicyEngine();
+    process.env.AUTHORIZED_ADDRESSES = authorizedRelayer.publicKey();
   });
+
+  afterEach(() => {
+    delete process.env.AUTHORIZED_ADDRESSES;
+  });
+
+  function signPRData(prData: PRData, keypair: Keypair, timestamp: number): PRData {
+    const payloadData = {
+      pull_request: prData.pull_request,
+      files_modified: prData.files_modified,
+      additions: prData.additions,
+      deletions: prData.deletions,
+      dependencies_added: prData.dependencies_added,
+      dependencies_updated: prData.dependencies_updated,
+      relayer: keypair.publicKey(),
+      timestamp,
+    };
+
+    const payload = JSON.stringify(payloadData);
+    const signature = keypair.sign(Buffer.from(payload)).toString("hex");
+
+    return {
+      ...prData,
+      relayer: keypair.publicKey(),
+      signature,
+      timestamp,
+    };
+  }
 
   describe("PR Title Validation", () => {
     it("should flag empty PR title", async () => {
-      const prData: PRData = {
+      const prData: PRData = signPRData({
         pull_request: {
           title: "",
           body: "Test PR",
@@ -26,7 +56,7 @@ describe("PolicyEngine", () => {
         files_modified: ["src/test.ts"],
         additions: 10,
         deletions: 5,
-      };
+      }, authorizedRelayer, Date.now());
 
       const result = await engine.evaluate(prData);
       expect(result.status).toBe("NON_COMPLIANT");
@@ -36,7 +66,7 @@ describe("PolicyEngine", () => {
     });
 
     it("should flag short PR title", async () => {
-      const prData: PRData = {
+      const prData: PRData = signPRData({
         pull_request: {
           title: "Fix bug",
           body: "Test PR",
@@ -49,7 +79,7 @@ describe("PolicyEngine", () => {
         files_modified: ["src/test.ts"],
         additions: 10,
         deletions: 5,
-      };
+      }, authorizedRelayer, Date.now());
 
       const result = await engine.evaluate(prData);
       expect(result.status).toBe("NON_COMPLIANT");
@@ -59,7 +89,7 @@ describe("PolicyEngine", () => {
     });
 
     it("should accept valid PR title", async () => {
-      const prData: PRData = {
+      const prData: PRData = signPRData({
         pull_request: {
           title: "Implement new security feature for audit trail",
           body: "This PR implements the new security feature",
@@ -72,7 +102,7 @@ describe("PolicyEngine", () => {
         files_modified: ["src/test.ts"],
         additions: 50,
         deletions: 10,
-      };
+      }, authorizedRelayer, Date.now());
 
       const result = await engine.evaluate(prData);
       expect(result.violations.some((v) => v.rule === "PR_TITLE_EMPTY")).toBe(
@@ -86,7 +116,7 @@ describe("PolicyEngine", () => {
 
   describe("PR Description Validation", () => {
     it("should flag missing PR description", async () => {
-      const prData: PRData = {
+      const prData: PRData = signPRData({
         pull_request: {
           title: "Implement new security feature",
           body: "",
@@ -99,7 +129,7 @@ describe("PolicyEngine", () => {
         files_modified: ["src/test.ts"],
         additions: 10,
         deletions: 5,
-      };
+      }, authorizedRelayer, Date.now());
 
       const result = await engine.evaluate(prData);
       expect(result.status).toBe("NON_COMPLIANT");
@@ -109,7 +139,7 @@ describe("PolicyEngine", () => {
     });
 
     it("should warn about undocumented testing", async () => {
-      const prData: PRData = {
+      const prData: PRData = signPRData({
         pull_request: {
           title: "Implement new security feature",
           body: "This PR implements a new feature without any verification performed.",
@@ -122,7 +152,7 @@ describe("PolicyEngine", () => {
         files_modified: ["src/test.ts"],
         additions: 10,
         deletions: 5,
-      };
+      }, authorizedRelayer, Date.now());
 
       const result = await engine.evaluate(prData);
       expect(
@@ -131,7 +161,7 @@ describe("PolicyEngine", () => {
     });
 
     it("should not warn when testing is documented", async () => {
-      const prData: PRData = {
+      const prData: PRData = signPRData({
         pull_request: {
           title: "Implement new security feature",
           body: "This PR implements a new feature. Tested with jest: npm test passed all tests.",
@@ -144,7 +174,7 @@ describe("PolicyEngine", () => {
         files_modified: ["src/test.ts"],
         additions: 10,
         deletions: 5,
-      };
+      }, authorizedRelayer, Date.now());
 
       const result = await engine.evaluate(prData);
       expect(
@@ -155,7 +185,7 @@ describe("PolicyEngine", () => {
 
   describe("Breaking Changes", () => {
     it("should flag breaking changes without label", async () => {
-      const prData: PRData = {
+      const prData: PRData = signPRData({
         pull_request: {
           title: "Redesign API interface",
           body: "This is a breaking change that restructures the public API",
@@ -168,7 +198,7 @@ describe("PolicyEngine", () => {
         files_modified: ["src/api.ts"],
         additions: 100,
         deletions: 50,
-      };
+      }, authorizedRelayer, Date.now());
 
       const result = await engine.evaluate(prData);
       expect(
@@ -177,7 +207,7 @@ describe("PolicyEngine", () => {
     });
 
     it("should accept breaking changes with label", async () => {
-      const prData: PRData = {
+      const prData: PRData = signPRData({
         pull_request: {
           title: "Redesign API interface",
           body: "This is a breaking change that restructures the public API",
@@ -190,7 +220,7 @@ describe("PolicyEngine", () => {
         files_modified: ["src/api.ts"],
         additions: 100,
         deletions: 50,
-      };
+      }, authorizedRelayer, Date.now());
 
       const result = await engine.evaluate(prData);
       expect(
@@ -201,7 +231,7 @@ describe("PolicyEngine", () => {
 
   describe("Security-Sensitive Changes", () => {
     it("should flag security changes without label", async () => {
-      const prData: PRData = {
+      const prData: PRData = signPRData({
         pull_request: {
           title: "Update cryptographic signature validation",
           body: "This PR updates the crypto signature handling logic",
@@ -214,7 +244,7 @@ describe("PolicyEngine", () => {
         files_modified: ["src/crypto.ts"],
         additions: 50,
         deletions: 30,
-      };
+      }, authorizedRelayer, Date.now());
 
       const result = await engine.evaluate(prData);
       // This produces a warning, not a violation
@@ -225,7 +255,7 @@ describe("PolicyEngine", () => {
     });
 
     it("should accept security changes with security label", async () => {
-      const prData: PRData = {
+      const prData: PRData = signPRData({
         pull_request: {
           title: "Update cryptographic signature validation",
           body: "This PR updates the crypto signature handling logic",
@@ -238,7 +268,7 @@ describe("PolicyEngine", () => {
         files_modified: ["src/crypto.ts"],
         additions: 50,
         deletions: 30,
-      };
+      }, authorizedRelayer, Date.now());
 
       const result = await engine.evaluate(prData);
       const hasSecurityWarning = result.warnings.some(
@@ -251,7 +281,7 @@ describe("PolicyEngine", () => {
   describe("Large Changes", () => {
     it("should warn about many files modified", async () => {
       const files = Array.from({ length: 25 }, (_, i) => `src/file${i}.ts`);
-      const prData: PRData = {
+      const prData: PRData = signPRData({
         pull_request: {
           title: "Implement new security feature with comprehensive refactoring",
           body: "This PR implements a new feature and refactors multiple modules for testing",
@@ -264,7 +294,7 @@ describe("PolicyEngine", () => {
         files_modified: files,
         additions: 500,
         deletions: 300,
-      };
+      }, authorizedRelayer, Date.now());
 
       const result = await engine.evaluate(prData);
       expect(
@@ -273,7 +303,7 @@ describe("PolicyEngine", () => {
     });
 
     it("should warn about large diffs", async () => {
-      const prData: PRData = {
+      const prData: PRData = signPRData({
         pull_request: {
           title: "Implement major rewrite of core module",
           body: "This PR rewrites the core module and has been tested comprehensively",
@@ -286,7 +316,7 @@ describe("PolicyEngine", () => {
         files_modified: ["src/core.ts"],
         additions: 800,
         deletions: 600,
-      };
+      }, authorizedRelayer, Date.now());
 
       const result = await engine.evaluate(prData);
       expect(
@@ -297,7 +327,7 @@ describe("PolicyEngine", () => {
 
   describe("Compliant PR", () => {
     it("should pass compliant PR", async () => {
-      const prData: PRData = {
+      const prData: PRData = signPRData({
         pull_request: {
           title: "Implement new audit logging feature",
           body: `
@@ -326,7 +356,7 @@ Updated CHANGELOG.md with new feature.
         files_modified: ["src/logging.ts", "src/index.ts"],
         additions: 150,
         deletions: 20,
-      };
+      }, authorizedRelayer, Date.now());
 
       const result = await engine.evaluate(prData);
       expect(result.status).toBe("COMPLIANT");
@@ -336,7 +366,7 @@ Updated CHANGELOG.md with new feature.
 
   describe("Report Generation", () => {
     it("should generate markdown report", async () => {
-      const prData: PRData = {
+      const prData: PRData = signPRData({
         pull_request: {
           title: "Test feature",
           body: "This is a test",
@@ -349,7 +379,7 @@ Updated CHANGELOG.md with new feature.
         files_modified: ["src/test.ts"],
         additions: 10,
         deletions: 5,
-      };
+      }, authorizedRelayer, Date.now());
 
       const result = await engine.evaluate(prData);
       const report = engine.generateReport(result);

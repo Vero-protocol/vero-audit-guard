@@ -131,6 +131,37 @@ deny[msg] {
     }
 }
 
+# Rule: Relayer signature must be present and from an authorized address
+deny[msg] {
+    not input.relayer
+    msg := {
+        "rule": "RELAYER_SIGNATURE_MISSING",
+        "severity": severity.CRITICAL,
+        "message": "❌ Relayer signature missing",
+        "detail": "PR data must be signed by an authorized relayer"
+    }
+}
+
+deny[msg] {
+    not input.signature
+    msg := {
+        "rule": "RELAYER_SIGNATURE_MISSING",
+        "severity": severity.CRITICAL,
+        "message": "❌ Relayer signature missing",
+        "detail": "PR data must be signed by an authorized relayer"
+    }
+}
+
+deny[msg] {
+    not input.timestamp
+    msg := {
+        "rule": "RELAYER_SIGNATURE_MISSING",
+        "severity": severity.CRITICAL,
+        "message": "❌ Relayer signature missing",
+        "detail": "PR data must be signed by an authorized relayer"
+    }
+}
+
 # Warnings (advisory, not blocking)
 warning[msg] {
     len(input.pull_request.title) > 100
