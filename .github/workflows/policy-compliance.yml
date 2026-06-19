@@ -140,6 +140,18 @@ jobs:
         with:
           script: |
             const fs = require('fs');
+            
+            // Check if policy result file exists
+            if (!fs.existsSync('/tmp/policy-result.json')) {
+              github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: '## 🔒 Policy Compliance Check\n\n❌ **Build Failed**\n\nThe policy compliance check could not complete. Please check the workflow logs for details.'
+              });
+              return;
+            }
+            
             const result = JSON.parse(fs.readFileSync('/tmp/policy-result.json', 'utf-8'));
             
             // Create comment body
@@ -197,10 +209,15 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const result = require('/tmp/policy-result.json');
+            const fs = require('fs');
+            let state = 'failure';
+            let description = 'The policy compliance check could not complete.';
             
-            const state = result.status === 'COMPLIANT' ? 'success' : 'failure';
-            const description = result.summary;
+            if (fs.existsSync('/tmp/policy-result.json')) {
+              const result = require('/tmp/policy-result.json');
+              state = result.status === 'COMPLIANT' ? 'success' : 'failure';
+              description = result.summary;
+            }
             
             github.rest.repos.createCommitStatus({
               owner: context.repo.owner,
