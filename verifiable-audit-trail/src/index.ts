@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Vero Verifiable Audit Trail
  * Computes SHA-256 of audit report files and submits them as Stellar
  * transaction memos (or Soroban contract calls) for on-chain immutability.
@@ -17,6 +17,16 @@ import {
   Horizon,
 } from "@stellar/stellar-sdk";
 
+export {
+  appendIncidentLog,
+  logSecurityIncident,
+  type IncidentSeverity,
+  type IncidentStatus,
+  type SecurityIncidentInput,
+  type SecurityIncidentLogEntry,
+} from "./incident-logger";
+
+
 const { Server } = Horizon;
 
 const HORIZON_URL = process.env.HORIZON_URL ?? "https://horizon-testnet.stellar.org";
@@ -28,6 +38,24 @@ function hashFile(filePath: string): string {
   const content = fs.readFileSync(filePath);
   return crypto.createHash("sha256").update(content).digest("hex");
 }
+
+function memoIdentifierFromSha256Hex(sha256Hex: string): string {
+  // Must match `anchorHash()` memo format
+  return `vero:${sha256Hex.slice(0, 22)}`;
+}
+
+function memoIdentifierFromFile(filePath: string): string {
+  const sha256Hex = hashFile(filePath);
+  return memoIdentifierFromSha256Hex(sha256Hex);
+}
+
+function extractMemoIdentifier(memoText: string | null | undefined): string | null {
+  if (!memoText) return null;
+  if (!memoText.startsWith("vero:")) return null;
+  // Keep full identifier as stored
+  return memoText;
+}
+
 
 async function anchorHash(hash: string, label: string): Promise<string> {
   const secretKey = process.env.AUDIT_KEYPAIR_SECRET;
