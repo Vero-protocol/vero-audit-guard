@@ -10,7 +10,9 @@
     "test:watch": "jest --watch",
     "lint": "eslint src --ext .ts",
     "evaluate": "ts-node src/cli.ts",
-    "check-pr": "ts-node src/cli.ts pr"
+    "check-pr": "ts-node src/cli.ts pr",
+    "backup": "ts-node src/backup.ts backup",
+    "restore": "ts-node src/backup.ts restore"
   },
   "keywords": [
     "opa",
@@ -25,7 +27,8 @@
     "@stellar/stellar-sdk": "^12.3.0",
     "axios": "^1.7.0",
     "dotenv": "^16.4.0",
-    "typescript": "^5.3.0"
+    "typescript": "^5.3.0",
+    "@aws-sdk/client-s3": "^3.500.0"
   },
   "devDependencies": {
     "@types/jest": "^29.5.0",

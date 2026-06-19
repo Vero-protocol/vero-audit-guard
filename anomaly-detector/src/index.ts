@@ -4,7 +4,14 @@
  *   - Nonce spike anomalies
  *   - Failed transaction bursts
  *   - Unauthorized address interactions
+ *   - Threat feed matches
  */
+import * as fs from "fs";
+import * as path from "path";
+
+import { ThreatFeedFetcher } from "./audit-guard/threat-feed-fetcher";
+
+export const threatFetcher = new ThreatFeedFetcher();
 
 export interface RelayerMetrics {
   address: string;
@@ -14,7 +21,7 @@ export interface RelayerMetrics {
 }
 
 export interface AnomalyAlert {
-  type: "NONCE_SPIKE" | "FAILED_TX_BURST" | "UNAUTHORIZED_ADDRESS";
+  type: "NONCE_SPIKE" | "FAILED_TX_BURST" | "UNAUTHORIZED_ADDRESS" | "THREAT_FEED_MATCH";
   severity: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
   address: string;
   detail: string;
@@ -29,15 +36,43 @@ const NONCE_SPIKE_THRESHOLD = Number(process.env.NONCE_SPIKE_THRESHOLD ?? 50);
 const FAILED_TX_THRESHOLD = Number(process.env.FAILED_TX_THRESHOLD ?? 10);
 const POLL_INTERVAL_MS = Number(process.env.POLL_INTERVAL_MS ?? 5000);
 
-const previousNonces = new Map<string, number>();
+const DB_PATH = path.join(__dirname, "nonce-db.json");
+const previousNonces = new Map<string, number>(loadNonces());
 const alerts: AnomalyAlert[] = [];
+
+function loadNonces(): [string, number][] {
+  try {
+    const data = fs.readFileSync(DB_PATH, "utf-8");
+    const obj = JSON.parse(data) as Record<string, number>;
+    return Object.entries(obj);
+  } catch {
+    return [];
+  }
+}
+
+function saveNonces(): void {
+  const obj: Record<string, number> = {};
+  for (const [addr, nonce] of previousNonces.entries()) {
+    obj[addr] = nonce;
+  }
+  fs.writeFileSync(DB_PATH, JSON.stringify(obj, null, 2));
+}
 
 function analyze(metrics: RelayerMetrics[]): AnomalyAlert[] {
   const detected: AnomalyAlert[] = [];
 
   for (const m of metrics) {
-    // Nonce spike detection
     const prevNonce = previousNonces.get(m.address) ?? m.nonce;
+    // Nonce reuse detection
+    if (previousNonces.has(m.address) && m.nonce <= prevNonce) {
+      detected.push({
+        type: "NONCE_REUSE",
+        severity: "HIGH",
+        address: m.address,
+        detail: `Nonce reuse detected (prev: ${prevNonce}, now: ${m.nonce})`,
+        timestamp: m.timestamp,
+      });
+    }
     const nonceDelta = m.nonce - prevNonce;
     if (nonceDelta > NONCE_SPIKE_THRESHOLD) {
       detected.push({
@@ -71,9 +106,21 @@ function analyze(metrics: RelayerMetrics[]): AnomalyAlert[] {
         timestamp: m.timestamp,
       });
     }
+
+    // Threat feed match
+    if (threatFetcher.isThreat(m.address)) {
+      detected.push({
+        type: "THREAT_FEED_MATCH",
+        severity: "CRITICAL",
+        address: m.address,
+        detail: `Address matches active blocklist in threat feed (last updated: ${threatFetcher.getLastUpdated()?.toISOString() ?? "never"})`,
+        timestamp: m.timestamp,
+      });
+    }
   }
 
-  return detected;
+    saveNonces();
+    return detected;
 }
 
 async function fetchMetrics(): Promise<RelayerMetrics[]> {
@@ -106,7 +153,20 @@ export async function runOnce(metrics: RelayerMetrics[]): Promise<AnomalyAlert[]
 
 async function monitor(): Promise<void> {
   console.log("[anomaly-detector] Starting Vero Relayer monitor...");
+  
+  try {
+    await threatFetcher.updateFeed();
+  } catch (err) {
+    console.error("[anomaly-detector] Initial threat feed update failed:", (err as Error).message);
+  }
+
   setInterval(async () => {
+    try {
+      await threatFetcher.updateFeed();
+    } catch (err) {
+      console.error("[anomaly-detector] Threat feed update error:", (err as Error).message);
+    }
+
     try {
       const metrics = await fetchMetrics();
       await runOnce(metrics);
