@@ -4,7 +4,11 @@
  */
 
 import * as fs from "fs";
+import * as dotenv from "dotenv";
 import PolicyEngine, { PRData } from "./policy-engine";
+
+// Load environment variables
+dotenv.config();
 
 async function main() {
   const args = process.argv.slice(2);
@@ -33,6 +37,9 @@ async function checkPR(): Promise<void> {
   const prData: PRData = JSON.parse(fs.readFileSync(prDataPath, "utf-8"));
   const engine = new PolicyEngine();
   const result = await engine.evaluate(prData);
+
+  // Report to dashboard if configured
+  await engine.reportToDashboard(result, prData);
 
   // Output result
   console.log(JSON.stringify(result, null, 2));
@@ -65,6 +72,9 @@ async function evaluate(): Promise<void> {
   const prData: PRData = JSON.parse(fs.readFileSync(dataFile, "utf-8"));
   const engine = new PolicyEngine();
   const result = await engine.evaluate(prData);
+
+  // Report to dashboard if configured
+  await engine.reportToDashboard(result, prData);
 
   console.log("\n📋 Policy Compliance Evaluation\n");
   console.log(engine.generateReport(result));

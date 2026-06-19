@@ -11,6 +11,7 @@ on:
 permissions:
   contents: read
   pull-requests: write
+  statuses: write
 
 jobs:
   policy-check:
@@ -100,6 +101,9 @@ jobs:
           (async () => {
             const result = await engine.evaluate(prData);
             
+            // Push alerts to Guardian Dashboard if configured
+            await engine.reportToDashboard(result, prData);
+
             // Save result
             fs.writeFileSync('/tmp/policy-result.json', JSON.stringify(result, null, 2));
             
@@ -108,8 +112,8 @@ jobs:
             console.log('REPORT<<EOF\n' + report + '\nEOF');
             
             // Set status
-            console.log(`::set-output name=status::${result.status}`);
-            console.log(`::set-output name=violations::${result.violations_count}`);
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, `status=${result.status}\n`);
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, `violations=${result.violations_count}\n`);
             
             process.exit(result.violations.length > 0 ? 1 : 0);
           })().catch(e => {
@@ -117,6 +121,11 @@ jobs:
             process.exit(1);
           });
           EOF
+        env:
+          GUARDIAN_DASH_URL: ${{ secrets.GUARDIAN_DASH_URL }}
+          GUARDIAN_DASH_TOKEN: ${{ secrets.GUARDIAN_DASH_TOKEN }}
+          MAINTENANCE_MODE: ${{ vars.MAINTENANCE_MODE }}
+          MAINTENANCE_MESSAGE: ${{ vars.MAINTENANCE_MESSAGE }}
         working-directory: src/audit-guard
 
       - name: Comment PR with policy result
