@@ -377,6 +377,98 @@ Enable debug output:
 DEBUG=* npm run evaluate ./pr-data.json
 ```
 
+## Relayer TX Scanner (Issue #25)
+
+The `RelayerTxScanner` prevents **unauthorized relaying** of transactions. Every TX that
+passes through the relayer is checked against an **allowlist of authorized signers**, with
+optional hard **denylist** and **multi-sig threshold** support.
+
+```typescript
+import { RelayerTxScanner, TxData } from "@vero/audit-guard-policy-engine";
+
+const scanner = new RelayerTxScanner({
+  authorizedSigners: ["G...alice", "G...bob"],
+  denylist: ["G...hacker"],
+  multisigThreshold: 2,
+  sourceAccounts: ["G...trusted-source"],
+});
+
+const result = scanner.scan({
+  sourceAccount: "G...trusted-source",
+  sequence: "123",
+  signers: ["G...alice", "G...bob"],
+  operations: [{ type: "payment" }],
+});
+
+if (result.status === "UNAUTHORIZED") {
+  // Alert + reject TX; result.violations has structured findings.
+}
+```
+
+### Configuration
+
+Configuration can come from a JSON file, env-var overrides, or both. The scanner
+auto-discovers `./relayer.config.json` or `./config/relayer.config.json`:
+
+```json
+{
+  "authorizedSigners": ["G...alice", "G...bob"],
+  "denylist": ["G...banned"],
+  "multisigThreshold": 2,
+  "sourceAccounts": ["G...trusted-relayer"]
+}
+```
+
+Environment overrides (highest precedence after explicit CLI args):
+
+| Variable | Description |
+|----------|-------------|
+| `RELAYER_CONFIG` | Path to relayer config JSON |
+| `RELAYER_AUTHORIZED_SIGNERS` | Comma-separated allowlist |
+| `RELAYER_DENYLIST` | Comma-separated denylist |
+| `RELAYER_MULTISIG_THRESHOLD` | Numeric threshold |
+
+> **Fail-closed default:** if no config file is found and no env-var override is
+> provided, the scanner uses an **empty allowlist**. Every TX will be flagged as
+> `UNAUTHORIZED` until a config is supplied.
+
+### CLI
+
+```bash
+# Scan a TX from a JSON file (auto-discovers config)
+node dist/cli.js scan-tx ./tx-data.json
+
+# With explicit config and report output
+RELAYER_CONFIG=./relayer.config.json \
+  TX_DATA_FILE=./tx.json \
+  REPORT_FILE=./report.md \
+  node dist/cli.js scan-tx
+```
+
+### Status semantics
+
+| Status | Meaning |
+|--------|---------|
+| `AUTHORIZED` | All signers in the allowlist, no violations, no warnings |
+| `REQUIRES_REVIEW` | No foreign-signer violations, but at least one warning (e.g. untrusted source account, threshold shortfall only) |
+| `UNAUTHORIZED` | At least one HIGH/CRITICAL violation (foreign signer, denylisted signer, threshold shortfall + foreign signer, empty signers) |
+
+### Rules emitted
+
+| Rule | Severity | When fired |
+|------|----------|------------|
+| `EMPTY_SIGNERS` | CRITICAL | TX has no signers |
+| `DENYLISTED_SIGNER` | CRITICAL | Any signer is on the hard-ban list |
+| `UNAUTHORIZED_SIGNER` | HIGH | Signer is not on the allowlist (and not denylisted) |
+| `MULTISIG_THRESHOLD_NOT_MET` | MEDIUM/HIGH | Authorized signer count is below the declared threshold |
+| `UNVERIFIED_SOURCE_ACCOUNT` | MEDIUM | TX source account is not in the trusted-source list |
+
+### OPA/Rego Integration
+
+The policy `policies/relayer_authz.rego` mirrors the TypeScript engine so that
+organizations using an OPA deployment can centralize policy. It emits the same
+rule identifiers and severities.
+
 ## Performance
 
 - **Evaluation:** < 100ms for typical PRs

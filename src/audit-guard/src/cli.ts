@@ -1,10 +1,12 @@
 /**
  * CLI for Policy Engine
- * Used by GitHub Actions to evaluate PR compliance
+ * Used by GitHub Actions to evaluate PR compliance and to scan
+ * relayed transactions for unauthorized signers (issue #25).
  */
 
 import * as fs from "fs";
 import PolicyEngine, { PRData } from "./policy-engine";
+import RelayerTxScanner, { TxData } from "./relayer-scanner";
 
 async function main() {
   const args = process.argv.slice(2);
@@ -12,6 +14,8 @@ async function main() {
 
   if (command === "pr" || command === "check-pr") {
     await checkPR();
+  } else if (command === "scan-tx") {
+    await scanTx(args);
   } else if (command === "help") {
     printHelp();
   } else {
@@ -92,6 +96,56 @@ async function evaluate(): Promise<void> {
   process.exit(result.violations.length > 0 ? 1 : 0);
 }
 
+/**
+ * Scan a relayed TX against the allowlist/denylist.
+ *
+ * Environment variables:
+ *   TX_DATA_FILE               Path to a TX JSON (default: ./tx-data.json)
+ *   RELAYER_CONFIG             Path to relayer config JSON (overrides default discovery)
+ *   RELAYER_AUTHORIZED_SIGNERS Comma-separated allowlist override
+ *   RELAYER_DENYLIST           Comma-separated denylist override
+ *   RELAYER_MULTISIG_THRESHOLD Minimum number of authorized signers required
+ *   REPORT_FILE                If set, writes a markdown report to this path
+ *
+ * Exit codes:
+ *   0  — TX is AUTHORIZED (or REQUIRES_REVIEW without REPORT_FILE)
+ *   1  — TX is UNAUTHORIZED or config/error problem
+ */
+async function scanTx(args: string[]): Promise<void> {
+  const txFile = process.env.TX_DATA_FILE || args[1] || "./tx-data.json";
+  if (!fs.existsSync(txFile)) {
+    console.error(`❌ TX data file not found: ${txFile}`);
+    console.log("Usage: scan-tx <tx-data.json>");
+    process.exit(1);
+  }
+
+  let tx: TxData;
+  try {
+    tx = JSON.parse(fs.readFileSync(txFile, "utf-8")) as TxData;
+  } catch (err) {
+    console.error(`❌ Failed to parse TX JSON: ${(err as Error).message}`);
+    process.exit(1);
+  }
+
+  const scanner = RelayerTxScanner.discover();
+  const result = scanner.scan(tx);
+  const report = scanner.generateReport(result);
+
+  console.log("\n🛰️  Relayer TX Scan\n");
+  console.log(report);
+  console.log("\n📊 Raw Result:");
+  console.log(JSON.stringify(result, null, 2));
+
+  if (process.env.REPORT_FILE) {
+    fs.writeFileSync(process.env.REPORT_FILE, report);
+    console.log(`\n📝 Report written to: ${process.env.REPORT_FILE}`);
+  }
+
+  if (result.status === "UNAUTHORIZED") {
+    process.exit(1);
+  }
+}
+
 function printHelp(): void {
   console.log(`
 Policy Engine CLI
@@ -100,18 +154,26 @@ Usage: policy-engine <command> [options]
 
 Commands:
   pr, check-pr      Check PR compliance using GitHub Actions context
+  scan-tx           Scan a relayed TX for unauthorized signers (issue #25)
   evaluate          Evaluate PR data from a JSON file (default)
   help              Show this help message
 
 Environment Variables:
-  PR_DATA_FILE      Path to PR data JSON file (default: ./pr-data.json)
-  REPORT_FILE       Output path for markdown report
-  OPA_POLICIES_DIR  Path to OPA policies directory
+  PR_DATA_FILE               Path to PR data JSON file (default: ./pr-data.json)
+  REPORT_FILE                Output path for markdown report
+  OPA_POLICIES_DIR           Path to OPA policies directory
+  TX_DATA_FILE               Path to TX JSON file (default: ./tx-data.json)
+  RELAYER_CONFIG             Path to relayer config JSON (overrides default discovery)
+  RELAYER_AUTHORIZED_SIGNERS Comma-separated allowlist override
+  RELAYER_DENYLIST           Comma-separated denylist override
+  RELAYER_MULTISIG_THRESHOLD Minimum number of authorized signers required
 
 Examples:
   node dist/cli.js pr
   node dist/cli.js evaluate ./my-pr-data.json
   PR_DATA_FILE=./data.json REPORT_FILE=./report.md node dist/cli.js pr
+  node dist/cli.js scan-tx ./tx-data.json
+  RELAYER_CONFIG=./relayer.config.json node dist/cli.js scan-tx ./tx.json
 `);
 }
 
