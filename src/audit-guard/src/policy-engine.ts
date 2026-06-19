@@ -31,6 +31,8 @@ export interface PRData {
     current_version: string;
     latest_version: string;
   }>;
+  maintenance_mode?: boolean;
+  maintenance_message?: string;
 }
 
 export interface PolicyViolation {
@@ -362,6 +364,13 @@ export class PolicyEngine {
           : "❌";
     report += `## ${emoji} Policy Compliance Check\n\n`;
     report += `**Status:** ${result.status}\n\n`;
+
+    // Maintenance Alert
+    if (result.maintenance_alert) {
+      report += `> [!IMPORTANT]\n`;
+      report += `> ### 🚧 MAINTENANCE NOTICE\n`;
+      report += `> ${result.maintenance_alert}\n\n`;
+    }
 
     // Summary
     report += `${result.summary}\n\n`;
