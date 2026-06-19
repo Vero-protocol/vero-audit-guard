@@ -14,8 +14,9 @@
 
 1. **Static analysis** — `scanner-engine` catches unsafe Rust patterns, unchecked storage writes, and incomplete code before they reach mainnet.
 2. **Real-time monitoring** — `anomaly-detector` watches the relayer service 24/7 for nonce spikes, failed-transaction bursts, and unauthorized address interactions.
-3. **Immutable audit history** — `verifiable-audit-trail` hashes every audit report and anchors it to the Stellar ledger, making tampering detectable by anyone.
-4. **Zero-tolerance on CRITICAL** — The CI pipeline hard-blocks any PR containing a CRITICAL static analysis finding.
+3. **Policy compliance** — `audit-guard` enforces Policy as Code on every PR using OPA, flagging non-compliant code before review.
+4. **Immutable audit history** — `verifiable-audit-trail` hashes every audit report and anchors it to the Stellar ledger, making tampering detectable by anyone.
+5. **Zero-tolerance on CRITICAL** — The CI pipeline hard-blocks any PR containing a CRITICAL static analysis finding or policy violations.
 
 ---
 
@@ -30,6 +31,9 @@
 │                                                    ▼            │
 │  vero-relayer-service ── anomaly-detector ── /reports/ ──┐      │
 │       (Node.js)            (TypeScript)      (JSON)      │      │
+│                                                          ▼      │
+│                         GitHub PRs ──── audit-guard ──────┐    │
+│                         (Pull Requests) (OPA/Rego)       │      │
 │                                                          ▼      │
 │                                          verifiable-audit-trail │
 │                                              (Stellar memo TX)  │
@@ -46,6 +50,7 @@
 |----------------------------|-----------|---------------------------------------------------|
 | `scanner-engine`           | Rust      | Static analysis of Soroban contracts              |
 | `anomaly-detector`         | TypeScript| Real-time relayer monitoring                      |
+| `audit-guard`              | TypeScript| Policy as Code enforcement on GitHub PRs           |
 | `verifiable-audit-trail`   | TypeScript| On-chain report hash anchoring (Stellar)          |
 | `BUILD_GUARD.sh`           | Bash      | Local and CI orchestrator                         |
 | `.github/workflows/`       | YAML      | PR-gated security pipeline                        |
@@ -56,6 +61,10 @@
 
 ```
 vero-audit-guard/
+├── src/audit-guard/         # OPA policy engine for PR compliance
+│   ├── src/policy-engine.ts
+│   ├── policies/pr_compliance.rego
+│   └── package.json
 ├── scanner-engine/          # Rust static analyzer
 │   └── src/main.rs
 ├── anomaly-detector/        # TypeScript relayer monitor
@@ -64,8 +73,10 @@ vero-audit-guard/
 │   └── src/index.ts
 ├── reports/                 # Generated scan reports (gitignored content)
 ├── .github/workflows/
-│   └── security-scan.yml    # PR-gated CI pipeline
+│   ├── security-scan.yml    # PR-gated CI pipeline
+│   └── policy-compliance.yml # OPA policy compliance checks
 ├── BUILD_GUARD.sh           # Local automation script
+├── POLICY_AS_CODE.md        # Policy engine documentation
 ├── INCIDENT_RESPONSE.md     # Emergency runbook
 └── VULNERABILITY_DISCLOSURE.md  # Bug bounty & reporting
 ```

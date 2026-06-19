@@ -1,0 +1,190 @@
+name: Policy Compliance Check
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - edited
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  policy-check:
+    name: OPA Policy Compliance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: src/audit-guard/package-lock.json
+
+      - name: Install audit-guard dependencies
+        run: npm ci
+        working-directory: src/audit-guard
+
+      - name: Build policy engine
+        run: npm run build
+        working-directory: src/audit-guard
+
+      - name: Extract PR data and run policy check
+        id: policy-check
+        run: |
+          node <<'EOF'
+          const fs = require('fs');
+          const path = require('path');
+
+          // Extract PR data from GitHub context
+          const prData = {
+            pull_request: {
+              title: process.env.PR_TITLE,
+              body: process.env.PR_BODY,
+              labels: JSON.parse(process.env.PR_LABELS),
+              base_branch: process.env.BASE_BRANCH,
+              head_branch: process.env.HEAD_BRANCH,
+              number: parseInt(process.env.PR_NUMBER),
+              author: process.env.PR_AUTHOR,
+            },
+            files_modified: JSON.parse(process.env.FILES_MODIFIED),
+            additions: parseInt(process.env.ADDITIONS),
+            deletions: parseInt(process.env.DELETIONS),
+          };
+
+          // Write PR data to temp file
+          fs.writeFileSync('/tmp/pr-data.json', JSON.stringify(prData, null, 2));
+          console.log('✅ PR data extracted and saved');
+          EOF
+
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
+          BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
+          HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          FILES_MODIFIED: ${{ toJson(github.event.pull_request.changed_files) }}
+          ADDITIONS: ${{ github.event.pull_request.additions }}
+          DELETIONS: ${{ github.event.pull_request.deletions }}
+
+      - name: Get list of changed files
+        id: changed-files
+        run: |
+          # Get list of changed files from GitHub API
+          FILES=$(curl -s \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files?per_page=100" \
+            | jq -r '.[].filename' | jq -R -s -c 'split("\n")[:-1]')
+          echo "files=$FILES" >> "$GITHUB_OUTPUT"
+
+      - name: Run policy evaluation
+        id: evaluation
+        run: |
+          node <<'EOF'
+          const PolicyEngine = require('./dist/policy-engine').default;
+          const fs = require('fs');
+          
+          // Load PR data
+          const prData = JSON.parse(fs.readFileSync('/tmp/pr-data.json', 'utf-8'));
+          prData.files_modified = ${{ steps.changed-files.outputs.files }};
+          
+          // Evaluate
+          const engine = new PolicyEngine();
+          (async () => {
+            const result = await engine.evaluate(prData);
+            
+            // Save result
+            fs.writeFileSync('/tmp/policy-result.json', JSON.stringify(result, null, 2));
+            
+            // Output for GitHub
+            const report = engine.generateReport(result);
+            console.log('REPORT<<EOF\n' + report + '\nEOF');
+            
+            // Set status
+            console.log(`::set-output name=status::${result.status}`);
+            console.log(`::set-output name=violations::${result.violations_count}`);
+            
+            process.exit(result.violations.length > 0 ? 1 : 0);
+          })().catch(e => {
+            console.error(e);
+            process.exit(1);
+          });
+          EOF
+        working-directory: src/audit-guard
+
+      - name: Comment PR with policy result
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const result = JSON.parse(fs.readFileSync('/tmp/policy-result.json', 'utf-8'));
+            
+            // Create comment body
+            let body = '## 🔒 Policy Compliance Check\n\n';
+            body += `**Status:** ${result.status === 'COMPLIANT' ? '✅ COMPLIANT' : '❌ NON_COMPLIANT'}\n\n`;
+            body += `${result.summary}\n\n`;
+            
+            if (result.violations.length > 0) {
+              body += '### ❌ Violations\n\n';
+              for (const v of result.violations) {
+                body += `- **${v.rule}** [${v.severity}]\n`;
+                body += `  ${v.message}\n`;
+                body += `  > ${v.detail}\n\n`;
+              }
+            }
+            
+            if (result.warnings.length > 0) {
+              body += '### ⚠️ Warnings\n\n';
+              for (const w of result.warnings) {
+                body += `- **${w.rule}** [${w.severity}]\n`;
+                body += `  ${w.message}\n`;
+                body += `  > ${w.detail}\n\n`;
+              }
+            }
+            
+            // Add footer
+            body += '---\n';
+            body += '*This PR has been evaluated against Vero Protocol compliance policies. ';
+            body += 'Fix violations to proceed.*\n';
+            
+            // Create or update comment
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });
+
+      - name: Set PR status
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const result = require('/tmp/policy-result.json');
+            
+            const state = result.status === 'COMPLIANT' ? 'success' : 'failure';
+            const description = result.summary;
+            
+            github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.payload.pull_request.head.sha,
+              state: state,
+              description: description,
+              context: 'Policy Compliance',
+              target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
+            });
+
+      - name: Fail if violations
+        if: failure() || steps.evaluation.outcome == 'failure'
+        run: |
+          echo "❌ Policy violations detected. Fix issues to proceed."
+          exit 1

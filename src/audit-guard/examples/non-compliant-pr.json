@@ -1,0 +1,40 @@
+{
+  "pull_request": {
+    "title": "Fix",
+    "body": "",
+    "labels": [],
+    "base_branch": "main",
+    "head_branch": "fix/quick-patch",
+    "number": 99,
+    "author": "developer"
+  },
+  "files_modified": [
+    "src/module1/file1.ts",
+    "src/module2/file2.ts",
+    "src/module3/file3.ts",
+    "src/module4/file4.ts",
+    "src/module5/file5.ts",
+    "src/module6/file6.ts",
+    "src/module7/file7.ts",
+    "src/module8/file8.ts",
+    "src/module9/file9.ts",
+    "src/module10/file10.ts",
+    "src/module11/file11.ts",
+    "src/module12/file12.ts",
+    "src/module13/file13.ts",
+    "src/module14/file14.ts",
+    "src/module15/file15.ts",
+    "src/module16/file16.ts",
+    "src/module17/file17.ts",
+    "src/module18/file18.ts",
+    "src/module19/file19.ts",
+    "src/module20/file20.ts",
+    "src/module21/file21.ts",
+    "src/module22/file22.ts",
+    "src/module23/file23.ts",
+    "src/module24/file24.ts",
+    "src/module25/file25.ts"
+  ],
+  "additions": 2000,
+  "deletions": 1500
+}
