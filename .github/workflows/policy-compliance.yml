@@ -11,6 +11,7 @@ on:
 permissions:
   contents: read
   pull-requests: write
+  statuses: write
 
 jobs:
   policy-check:
@@ -72,6 +73,8 @@ jobs:
           FILES_MODIFIED: ${{ toJson(github.event.pull_request.changed_files) }}
           ADDITIONS: ${{ github.event.pull_request.additions }}
           DELETIONS: ${{ github.event.pull_request.deletions }}
+          MAINTENANCE_MODE: ${{ vars.MAINTENANCE_MODE }}
+          MAINTENANCE_MESSAGE: ${{ vars.MAINTENANCE_MESSAGE }}
 
       - name: Get list of changed files
         id: changed-files
@@ -94,6 +97,14 @@ jobs:
           // Load PR data
           const prData = JSON.parse(fs.readFileSync('/tmp/pr-data.json', 'utf-8'));
           prData.files_modified = ${{ steps.changed-files.outputs.files }};
+
+          // Add maintenance info from environment
+          if (process.env.MAINTENANCE_MODE === 'true') {
+            prData.maintenance_mode = true;
+            if (process.env.MAINTENANCE_MESSAGE) {
+              prData.maintenance_message = process.env.MAINTENANCE_MESSAGE;
+            }
+          }
           
           // Evaluate
           const engine = new PolicyEngine();
@@ -108,8 +119,9 @@ jobs:
             console.log('REPORT<<EOF\n' + report + '\nEOF');
             
             // Set status
-            console.log(`::set-output name=status::${result.status}`);
-            console.log(`::set-output name=violations::${result.violations_count}`);
+            const fsOutput = require('fs');
+            fsOutput.appendFileSync(process.env.GITHUB_OUTPUT, `status=${result.status}\n`);
+            fsOutput.appendFileSync(process.env.GITHUB_OUTPUT, `violations=${result.violations_count}\n`);
             
             process.exit(result.violations.length > 0 ? 1 : 0);
           })().catch(e => {
@@ -117,6 +129,9 @@ jobs:
             process.exit(1);
           });
           EOF
+        env:
+          MAINTENANCE_MODE: ${{ vars.MAINTENANCE_MODE }}
+          MAINTENANCE_MESSAGE: ${{ vars.MAINTENANCE_MESSAGE }}
         working-directory: src/audit-guard
 
       - name: Comment PR with policy result
@@ -130,6 +145,13 @@ jobs:
             // Create comment body
             let body = '## 🔒 Policy Compliance Check\n\n';
             body += `**Status:** ${result.status === 'COMPLIANT' ? '✅ COMPLIANT' : '❌ NON_COMPLIANT'}\n\n`;
+
+            if (result.maintenance_alert) {
+              body += `> [!IMPORTANT]\n`;
+              body += `> ### 🚧 MAINTENANCE NOTICE\n`;
+              body += `> ${result.maintenance_alert}\n\n`;
+            }
+
             body += `${result.summary}\n\n`;
             
             if (result.violations.length > 0) {
@@ -148,6 +170,13 @@ jobs:
                 body += `  ${w.message}\n`;
                 body += `  > ${w.detail}\n\n`;
               }
+            }
+
+            // Add security tip
+            if (result.security_tip) {
+              body += '---\n';
+              body += `### 🎓 Security Training: ${result.security_tip.title}\n\n`;
+              body += `${result.security_tip.content}\n\n`;
             }
             
             // Add footer

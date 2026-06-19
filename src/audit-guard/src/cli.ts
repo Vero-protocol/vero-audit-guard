@@ -31,6 +31,15 @@ async function checkPR(): Promise<void> {
   }
 
   const prData: PRData = JSON.parse(fs.readFileSync(prDataPath, "utf-8"));
+
+  // Add maintenance info from environment
+  if (process.env.MAINTENANCE_MODE === "true") {
+    prData.maintenance_mode = true;
+    if (process.env.MAINTENANCE_MESSAGE) {
+      prData.maintenance_message = process.env.MAINTENANCE_MESSAGE;
+    }
+  }
+
   const engine = new PolicyEngine();
   const result = await engine.evaluate(prData);
 
@@ -63,6 +72,15 @@ async function evaluate(): Promise<void> {
   }
 
   const prData: PRData = JSON.parse(fs.readFileSync(dataFile, "utf-8"));
+
+  // Add maintenance info from environment
+  if (process.env.MAINTENANCE_MODE === "true") {
+    prData.maintenance_mode = true;
+    if (process.env.MAINTENANCE_MESSAGE) {
+      prData.maintenance_message = process.env.MAINTENANCE_MESSAGE;
+    }
+  }
+
   const engine = new PolicyEngine();
   const result = await engine.evaluate(prData);
 

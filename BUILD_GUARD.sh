@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # BUILD_GUARD.sh — Vero Protocol Watchtower Automation
 # Scaffolds directories, runs scanner, tests anomaly-detector, anchors audit trail.
-set -euo pipefail
+set -eu
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPORTS_DIR="$ROOT/reports"
