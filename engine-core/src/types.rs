@@ -14,6 +14,19 @@ pub struct StateCommitment {
     pub author:     Address,
 }
 
+/// Proposal state machine for multi-sig governance.
+/// Valid transitions: Pending → Approved → Executed
+#[contracttype]
+#[derive(Clone, Debug, Copy, PartialEq, Eq)]
+pub enum ProposalState {
+    /// Awaiting approvals (default state at proposal creation)
+    Pending = 0,
+    /// Threshold met; time-lock window active before execution
+    Approved = 1,
+    /// Executed; terminal state
+    Executed = 2,
+}
+
 /// Governance proposal passed to multi-sig hooks.
 #[contracttype]
 #[derive(Clone, Debug)]
@@ -22,7 +35,7 @@ pub struct Proposal {
     pub action_hash: BytesN<32>,
     pub proposer:    Address,
     pub approved_by: soroban_sdk::Vec<Address>,
-    pub executed:    bool,
+    pub state:       ProposalState,
 }
 
 /// Circuit-breaker state persisted in contract storage.

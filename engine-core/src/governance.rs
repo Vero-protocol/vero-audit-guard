@@ -3,12 +3,18 @@
 //! A `Proposal` requires `threshold` distinct approvals before `execute`
 //! can be called. The time-lock window enforces a mandatory delay between
 //! full approval and execution, giving stakeholders a veto window.
+//!
+//! ## Proposal State Machine
+//! ```
+//! Pending ─ (on approve, threshold met) → Approved ─ (on execute, timelock elapsed) → Executed
+//! ```
+//! Invalid transitions trigger contract panics.
 
 use soroban_sdk::{
     contracttype, panic_with_error, symbol_short, vec, Address, Env, Map, Symbol, Vec,
 };
 
-use crate::types::Proposal;
+use crate::types::{Proposal, ProposalState};
 
 const KEY_PROPOSALS: Symbol = symbol_short!("PROPS");
 const KEY_SIGNERS:   Symbol = symbol_short!("SIGNERS");
@@ -19,12 +25,12 @@ const TIMELOCK_LEDGERS: u32 = 720;
 #[contracttype]
 #[derive(Copy, Clone)]
 pub enum GovError {
-    NotASigner       = 1,
-    AlreadyApproved  = 2,
-    ThresholdNotMet  = 3,
-    TimelockActive   = 4,
-    AlreadyExecuted  = 5,
-    ProposalNotFound = 6,
+    NotASigner         = 1,
+    AlreadyApproved    = 2,
+    ThresholdNotMet    = 3,
+    TimelockActive     = 4,
+    InvalidStateTransition = 5,
+    ProposalNotFound   = 6,
 }
 
 /// Initialise governance with an ordered signer set and approval threshold.
@@ -41,11 +47,14 @@ fn load_proposals(env: &Env) -> Map<u64, (Proposal, u32)> {
 }
 
 /// Submit a new proposal. Returns the assigned proposal id.
-pub fn propose(env: &Env, proposal: Proposal) -> u64 {
+pub fn propose(env: &Env, mut proposal: Proposal) -> u64 {
     let signers: Vec<Address> = env.storage().instance().get(&KEY_SIGNERS).unwrap_or(vec![env]);
     if !signers.contains(&proposal.proposer) {
         panic_with_error!(env, GovError::NotASigner);
     }
+    // Initialize state to Pending
+    proposal.state = ProposalState::Pending;
+    
     let mut props = load_proposals(env);
     let unlock_ledger = env.ledger().sequence() + TIMELOCK_LEDGERS;
     props.set(proposal.id, (proposal.clone(), unlock_ledger));
@@ -58,42 +67,61 @@ pub fn propose(env: &Env, proposal: Proposal) -> u64 {
 }
 
 /// Record a signer's approval for `proposal_id`.
+/// Transitions state from Pending → Approved when threshold is met.
 pub fn approve(env: &Env, signer: &Address, proposal_id: u64) {
     signer.require_auth();
     let signers: Vec<Address> = env.storage().instance().get(&KEY_SIGNERS).unwrap_or(vec![env]);
     if !signers.contains(signer) {
         panic_with_error!(env, GovError::NotASigner);
     }
+    let threshold: u32 = env.storage().instance().get(&KEY_THRESH).unwrap_or(1);
 
     let mut props = load_proposals(env);
     let (mut prop, unlock) = props.get(proposal_id).unwrap_or_else(|| {
         panic_with_error!(env, GovError::ProposalNotFound)
     });
+    
+    // Only pending proposals can receive approvals
+    if prop.state != ProposalState::Pending {
+        panic_with_error!(env, GovError::InvalidStateTransition);
+    }
+    
     if prop.approved_by.contains(signer) {
         panic_with_error!(env, GovError::AlreadyApproved);
     }
     prop.approved_by.push_back(signer.clone());
+    
+    // Transition to Approved when threshold is met
+    if (prop.approved_by.len() as u32) >= threshold {
+        prop.state = ProposalState::Approved;
+        env.events().publish(
+            (symbol_short!("GOV"), symbol_short!("approved")),
+            proposal_id,
+        );
+    }
+    
     props.set(proposal_id, (prop, unlock));
     env.storage().instance().set(&KEY_PROPOSALS, &props);
 }
 
 /// Execute a proposal after threshold approvals and time-lock expiry.
+/// Transitions state from Approved → Executed.
 pub fn execute(env: &Env, proposal_id: u64) -> Proposal {
-    let threshold: u32 = env.storage().instance().get(&KEY_THRESH).unwrap_or(1);
     let mut props = load_proposals(env);
     let (mut prop, unlock) = props.get(proposal_id).unwrap_or_else(|| {
         panic_with_error!(env, GovError::ProposalNotFound)
     });
-    if prop.executed {
-        panic_with_error!(env, GovError::AlreadyExecuted);
+    
+    // Only approved proposals can be executed
+    if prop.state != ProposalState::Approved {
+        panic_with_error!(env, GovError::InvalidStateTransition);
     }
-    if (prop.approved_by.len() as u32) < threshold {
-        panic_with_error!(env, GovError::ThresholdNotMet);
-    }
+    
     if env.ledger().sequence() < unlock {
         panic_with_error!(env, GovError::TimelockActive);
     }
-    prop.executed = true;
+    
+    prop.state = ProposalState::Executed;
     props.set(proposal_id, (prop.clone(), unlock));
     env.storage().instance().set(&KEY_PROPOSALS, &props);
     env.events().publish(
@@ -102,3 +130,4 @@ pub fn execute(env: &Env, proposal_id: u64) -> Proposal {
     );
     prop
 }
+
