@@ -1,0 +1,311 @@
+/**
+ * event-queue.ts — Persistent local queue for events.
+ *
+ * Buffers events to SQLite before passing to handlers, preventing data loss
+ * during traffic spikes or downstream handler failures. Supports recovery of
+ * unprocessed events on restart.
+ *
+ * Queue States:
+ *   pending   → Enqueued, awaiting handler processing
+ *   processing → Currently being handled
+ *   processed → Successfully handled
+ *   failed    → Handler failed; eligible for retry
+ */
+
+import Database from "better-sqlite3";
+import { EngineEvent } from "./event-propagator";
+import * as fs from "fs";
+import * as path from "path";
+
+const DEFAULT_DB_PATH = path.join(process.cwd(), "event-queue.db");
+const MAX_RETRIES = 3;
+
+export interface QueuedEvent {
+  id: string;
+  eventData: EngineEvent;
+  status: "pending" | "processing" | "processed" | "failed";
+  attempts: number;
+  enqueueTime: number;
+  processTime?: number;
+  error?: string;
+}
+
+export class EventQueue {
+  private db: Database.Database;
+  private readonly dbPath: string;
+  private readonly maxRetries: number;
+
+  constructor(dbPath: string = DEFAULT_DB_PATH, maxRetries: number = MAX_RETRIES) {
+    this.dbPath = dbPath;
+    this.maxRetries = maxRetries;
+    this.db = this.initializeDatabase();
+  }
+
+  /**
+   * Initialize SQLite database with events table if not present.
+   * Schema:
+   *   id (TEXT PK)      - Unique event identifier
+   *   eventData (TEXT)  - JSON-serialized EngineEvent
+   *   status (TEXT)     - pending | processing | processed | failed
+   *   attempts (INT)    - Number of processing attempts
+   *   enqueueTime (INT) - Milliseconds since epoch
+   *   processTime (INT) - Milliseconds since epoch (nullable)
+   *   error (TEXT)      - Last error message (nullable)
+   */
+  private initializeDatabase(): Database.Database {
+    const db = new Database(this.dbPath);
+    db.pragma("journal_mode = WAL");
+    db.pragma("synchronous = NORMAL");
+
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS events (
+        id TEXT PRIMARY KEY,
+        eventData TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        attempts INT NOT NULL DEFAULT 0,
+        enqueueTime INT NOT NULL,
+        processTime INT,
+        error TEXT
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_status ON events(status);
+      CREATE INDEX IF NOT EXISTS idx_enqueueTime ON events(enqueueTime);
+    `);
+
+    return db;
+  }
+
+  /**
+   * Enqueue an event for processing. Returns true if successfully queued.
+   */
+  enqueue(event: EngineEvent): boolean {
+    try {
+      const stmt = this.db.prepare(`
+        INSERT INTO events (id, eventData, status, attempts, enqueueTime)
+        VALUES (?, ?, ?, ?, ?)
+      `);
+
+      stmt.run(
+        event.id,
+        JSON.stringify(event),
+        "pending",
+        0,
+        Date.now()
+      );
+
+      return true;
+    } catch (err) {
+      console.error("[EventQueue] Enqueue failed:", err);
+      return false;
+    }
+  }
+
+  /**
+   * Dequeue a pending event for processing. Transitions to 'processing' state.
+   * Returns the event or null if none available.
+   */
+  dequeue(): QueuedEvent | null {
+    try {
+      const stmt = this.db.prepare(`
+        SELECT * FROM events
+        WHERE status = 'pending' OR (status = 'failed' AND attempts < ?)
+        ORDER BY enqueueTime ASC
+        LIMIT 1
+      `);
+
+      const row = stmt.get(this.maxRetries) as any;
+      if (!row) return null;
+
+      // Transition to processing
+      const updateStmt = this.db.prepare(`
+        UPDATE events
+        SET status = 'processing', attempts = attempts + 1
+        WHERE id = ?
+      `);
+      updateStmt.run(row.id);
+
+      return {
+        id: row.id,
+        eventData: JSON.parse(row.eventData),
+        status: "processing",
+        attempts: row.attempts + 1,
+        enqueueTime: row.enqueueTime,
+        processTime: row.processTime,
+        error: row.error,
+      };
+    } catch (err) {
+      console.error("[EventQueue] Dequeue failed:", err);
+      return null;
+    }
+  }
+
+  /**
+   * Mark an event as successfully processed. Transitions to 'processed' state.
+   */
+  markProcessed(eventId: string): boolean {
+    try {
+      const stmt = this.db.prepare(`
+        UPDATE events
+        SET status = 'processed', processTime = ?
+        WHERE id = ?
+      `);
+      stmt.run(Date.now(), eventId);
+      return true;
+    } catch (err) {
+      console.error("[EventQueue] Mark processed failed:", err);
+      return false;
+    }
+  }
+
+  /**
+   * Mark an event as failed with error message. If retries available,
+   * transitions back to 'pending'; otherwise to 'failed'.
+   */
+  markFailed(eventId: string, error: Error): boolean {
+    try {
+      // Get current attempt count
+      const getStmt = this.db.prepare("SELECT attempts FROM events WHERE id = ?");
+      const row = getStmt.get(eventId) as any;
+
+      if (!row) return false;
+
+      const hasMoreRetries = row.attempts < this.maxRetries;
+      const newStatus = hasMoreRetries ? "pending" : "failed";
+
+      const stmt = this.db.prepare(`
+        UPDATE events
+        SET status = ?, error = ?
+        WHERE id = ?
+      `);
+      stmt.run(newStatus, error.message, eventId);
+
+      return true;
+    } catch (err) {
+      console.error("[EventQueue] Mark failed failed:", err);
+      return false;
+    }
+  }
+
+  /**
+   * Recover unprocessed events from queue (for startup).
+   * Returns all pending and failed (with retries available) events.
+   */
+  recoverPending(): QueuedEvent[] {
+    try {
+      const stmt = this.db.prepare(`
+        SELECT * FROM events
+        WHERE status = 'pending' OR (status = 'failed' AND attempts < ?)
+        ORDER BY enqueueTime ASC
+      `);
+
+      const rows = stmt.all(this.maxRetries) as any[];
+      return rows.map(row => ({
+        id: row.id,
+        eventData: JSON.parse(row.eventData),
+        status: row.status,
+        attempts: row.attempts,
+        enqueueTime: row.enqueueTime,
+        processTime: row.processTime,
+        error: row.error,
+      }));
+    } catch (err) {
+      console.error("[EventQueue] Recover pending failed:", err);
+      return [];
+    }
+  }
+
+  /**
+   * Get queue statistics (size, oldest event, error rate).
+   */
+  getStats(): {
+    total: number;
+    pending: number;
+    processing: number;
+    processed: number;
+    failed: number;
+    oldestEventAge: number | null;
+  } {
+    try {
+      const countStmt = this.db.prepare("SELECT status, COUNT(*) as count FROM events GROUP BY status");
+      const counts = countStmt.all() as any[];
+
+      const countMap: Record<string, number> = {
+        pending: 0,
+        processing: 0,
+        processed: 0,
+        failed: 0,
+      };
+
+      counts.forEach(row => {
+        countMap[row.status] = row.count;
+      });
+
+      const oldestStmt = this.db.prepare("SELECT enqueueTime FROM events ORDER BY enqueueTime ASC LIMIT 1");
+      const oldest = oldestStmt.get() as any;
+      const oldestEventAge = oldest ? Date.now() - oldest.enqueueTime : null;
+
+      return {
+        total: counts.reduce((sum, row) => sum + row.count, 0),
+        pending: countMap.pending,
+        processing: countMap.processing,
+        processed: countMap.processed,
+        failed: countMap.failed,
+        oldestEventAge,
+      };
+    } catch (err) {
+      console.error("[EventQueue] Get stats failed:", err);
+      return {
+        total: 0,
+        pending: 0,
+        processing: 0,
+        processed: 0,
+        failed: 0,
+        oldestEventAge: null,
+      };
+    }
+  }
+
+  /**
+   * Clean up old processed events. Removes processed events older than maxAgeMs.
+   */
+  cleanup(maxAgeMs: number = 24 * 60 * 60 * 1000): number {
+    try {
+      const stmt = this.db.prepare(`
+        DELETE FROM events
+        WHERE status = 'processed' AND processTime < ?
+      `);
+
+      const cutoff = Date.now() - maxAgeMs;
+      const result = stmt.run(cutoff);
+      return result.changes;
+    } catch (err) {
+      console.error("[EventQueue] Cleanup failed:", err);
+      return 0;
+    }
+  }
+
+  /**
+   * Close database connection.
+   */
+  close(): void {
+    if (this.db) {
+      this.db.close();
+    }
+  }
+
+  /**
+   * Delete queue file (for testing/reset). Closes database first.
+   */
+  deleteQueue(): void {
+    this.close();
+    if (fs.existsSync(this.dbPath)) {
+      fs.unlinkSync(this.dbPath);
+    }
+    if (fs.existsSync(this.dbPath + "-shm")) {
+      fs.unlinkSync(this.dbPath + "-shm");
+    }
+    if (fs.existsSync(this.dbPath + "-wal")) {
+      fs.unlinkSync(this.dbPath + "-wal");
+    }
+  }
+}
