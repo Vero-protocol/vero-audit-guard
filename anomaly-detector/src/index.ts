@@ -4,7 +4,12 @@
  *   - Nonce spike anomalies
  *   - Failed transaction bursts
  *   - Unauthorized address interactions
+ *   - Threat feed matches
  */
+
+import { ThreatFeedFetcher } from "./audit-guard/threat-feed-fetcher";
+
+export const threatFetcher = new ThreatFeedFetcher();
 
 export interface RelayerMetrics {
   address: string;
@@ -14,7 +19,7 @@ export interface RelayerMetrics {
 }
 
 export interface AnomalyAlert {
-  type: "NONCE_SPIKE" | "FAILED_TX_BURST" | "UNAUTHORIZED_ADDRESS";
+  type: "NONCE_SPIKE" | "FAILED_TX_BURST" | "UNAUTHORIZED_ADDRESS" | "THREAT_FEED_MATCH";
   severity: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
   address: string;
   detail: string;
@@ -71,6 +76,17 @@ function analyze(metrics: RelayerMetrics[]): AnomalyAlert[] {
         timestamp: m.timestamp,
       });
     }
+
+    // Threat feed match
+    if (threatFetcher.isThreat(m.address)) {
+      detected.push({
+        type: "THREAT_FEED_MATCH",
+        severity: "CRITICAL",
+        address: m.address,
+        detail: `Address matches active blocklist in threat feed (last updated: ${threatFetcher.getLastUpdated()?.toISOString() ?? "never"})`,
+        timestamp: m.timestamp,
+      });
+    }
   }
 
   return detected;
@@ -106,7 +122,20 @@ export async function runOnce(metrics: RelayerMetrics[]): Promise<AnomalyAlert[]
 
 async function monitor(): Promise<void> {
   console.log("[anomaly-detector] Starting Vero Relayer monitor...");
+  
+  try {
+    await threatFetcher.updateFeed();
+  } catch (err) {
+    console.error("[anomaly-detector] Initial threat feed update failed:", (err as Error).message);
+  }
+
   setInterval(async () => {
+    try {
+      await threatFetcher.updateFeed();
+    } catch (err) {
+      console.error("[anomaly-detector] Threat feed update error:", (err as Error).message);
+    }
+
     try {
       const metrics = await fetchMetrics();
       await runOnce(metrics);
