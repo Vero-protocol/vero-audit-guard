@@ -10,6 +10,13 @@ export type {
   EvaluationResult,
 } from "./policy-engine";
 
+export { default as LogAnalyzer } from "./log-analyzer";
+export type {
+  LogEntry,
+  LogAnomaly,
+  LogAnalyzerConfig,
+} from "./log-analyzer";
+
 // Re-export for convenience
 import PolicyEngine from "./policy-engine";
 export default PolicyEngine;

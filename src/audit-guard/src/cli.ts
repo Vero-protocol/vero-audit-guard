@@ -5,6 +5,7 @@
 
 import * as fs from "fs";
 import PolicyEngine, { PRData } from "./policy-engine";
+import { LogAnalyzer, LogEntry } from "./log-analyzer";
 
 async function main() {
   const args = process.argv.slice(2);
@@ -12,6 +13,8 @@ async function main() {
 
   if (command === "pr" || command === "check-pr") {
     await checkPR();
+  } else if (command === "logs" || command === "analyze-logs") {
+    await analyzeLogs();
   } else if (command === "help") {
     printHelp();
   } else {
@@ -51,6 +54,36 @@ async function checkPR(): Promise<void> {
 }
 
 /**
+ * Analyze log data from a JSON file
+ */
+async function analyzeLogs(): Promise<void> {
+  const logFile = process.argv[3] || "./logs.json";
+
+  if (!fs.existsSync(logFile)) {
+    console.error(`❌ Log file not found: ${logFile}`);
+    console.log("Usage: analyze-logs <logs.json>");
+    process.exit(1);
+  }
+
+  const logs: LogEntry[] = JSON.parse(fs.readFileSync(logFile, "utf-8"));
+  const analyzer = new LogAnalyzer();
+  const anomalies = analyzer.analyze(logs);
+
+  console.log("\n🔍 Log Anomaly Analysis\n");
+  if (anomalies.length === 0) {
+    console.log("✅ No log anomalies detected.");
+  } else {
+    console.log(`❌ Detected ${anomalies.length} anomaly/anomalies:\n`);
+    for (const a of anomalies) {
+      const emoji = a.severity === "CRITICAL" ? "🚨" : a.severity === "HIGH" ? "❌" : "⚠️";
+      console.log(`${emoji} [${a.type}][${a.severity}] ${a.timestamp} — ${a.message}`);
+    }
+  }
+
+  process.exit(anomalies.length > 0 ? 1 : 0);
+}
+
+/**
  * Evaluate a local PR data file
  */
 async function evaluate(): Promise<void> {
@@ -82,6 +115,7 @@ Usage: policy-engine <command> [options]
 
 Commands:
   pr, check-pr      Check PR compliance using GitHub Actions context
+  logs, analyze-logs [file] Analyze relayer logs for anomalies
   evaluate          Evaluate PR data from a JSON file (default)
   help              Show this help message
 
@@ -92,6 +126,7 @@ Environment Variables:
 
 Examples:
   node dist/cli.js pr
+  node dist/cli.js analyze-logs ./relayer-logs.json
   node dist/cli.js evaluate ./my-pr-data.json
   PR_DATA_FILE=./data.json REPORT_FILE=./report.md node dist/cli.js pr
 `);
