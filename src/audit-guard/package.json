@@ -10,7 +10,9 @@
     "test:watch": "jest --watch",
     "lint": "eslint src --ext .ts",
     "evaluate": "ts-node src/cli.ts",
-    "check-pr": "ts-node src/cli.ts pr"
+    "check-pr": "ts-node src/cli.ts pr",
+    "backup": "ts-node src/backup.ts backup",
+    "restore": "ts-node src/backup.ts restore"
   },
   "keywords": [
     "opa",
