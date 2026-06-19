@@ -53,6 +53,25 @@ Ensures PRs meet minimum quality and documentation standards:
 | `TOO_MANY_FILES_MODIFIED` | MEDIUM | >20 files should be split into smaller PRs |
 | `LARGE_DIFF_REQUIRES_JUSTIFICATION` | MEDIUM | >1000 line changes need justification |
 
+## Immutable Audit Trail
+
+`audit-guard` supports anchoring audit results to the Stellar ledger for immutability and anti-tampering.
+
+### Configuration
+
+| Environment Variable | Description |
+|----------------------|-------------|
+| `ANCHOR_ON_CHAIN` | Set to `true` to enable on-chain anchoring |
+| `AUDIT_KEYPAIR_SECRET` | Stellar secret key for transaction signing |
+| `STELLAR_NETWORK` | `mainnet` or `testnet` (default: `testnet`) |
+| `HORIZON_URL` | Custom Horizon server URL |
+
+### How it works
+
+1. The engine computes a SHA-256 hash of the full `EvaluationResult`.
+2. A Stellar transaction is created with the hash in the `MEMO_TEXT` field.
+3. The transaction is submitted to the ledger, creating a permanent, timestamped record of the audit.
+
 ### Dependency Security (`dependencies.rego`)
 
 Validates new dependencies for security compliance:
