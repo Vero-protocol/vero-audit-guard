@@ -6,6 +6,8 @@
 import { execSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
+import { SyncValidator } from "./sync-validator";
+import { SyncDriftError } from "./errors";
 
 export interface PRData {
   pull_request: {
@@ -30,6 +32,7 @@ export interface PRData {
     current_version: string;
     latest_version: string;
   }>;
+  state_hash?: string;
 }
 
 export interface PolicyViolation {
@@ -123,6 +126,33 @@ export class PolicyEngine {
   private async evaluateWithoutOPA(prData: PRData): Promise<EvaluationResult> {
     const violations: PolicyViolation[] = [];
     const warnings: PolicyViolation[] = [];
+    // Sync validation
+    try {
+      const validator = new SyncValidator();
+      await validator.validate(prData);
+    } catch (e) {
+      if (e instanceof SyncDriftError) {
+        violations.push({
+          rule: "SYNC_DRIFT_DETECTED",
+          severity: "HIGH",
+          message: "❌ Sync drift detected",
+          detail: e.message,
+        });
+        // early return with this violation (skip other checks)
+        return {
+          status: "NON_COMPLIANT",
+          violations,
+          warnings,
+          summary: `Sync drift detected`,
+          violations_count: violations.length,
+          warnings_count: warnings.length,
+          high_severity_violations: violations,
+        };
+      } else {
+        // rethrow unexpected errors
+        throw e;
+      }
+    }
 
     // PR Title checks
     if (prData.pull_request.title === "") {
