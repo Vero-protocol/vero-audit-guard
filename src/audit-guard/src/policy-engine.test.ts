@@ -359,4 +359,73 @@ Updated CHANGELOG.md with new feature.
       expect(report).toContain(result.summary);
     });
   });
+
+  describe("Maintenance Mode", () => {
+    it("should include maintenance alert in evaluation result when enabled", async () => {
+      const prData: PRData = {
+        pull_request: {
+          title: "Implement new audit logging feature",
+          body: "Testing documented here.",
+          labels: ["feature", "trivial"],
+          base_branch: "develop",
+          head_branch: "feature/audit-logging",
+          number: 123,
+          author: "test-user",
+        },
+        files_modified: ["src/logging.ts"],
+        additions: 10,
+        deletions: 5,
+        maintenance_mode: true,
+        maintenance_message: "Custom maintenance message",
+      };
+
+      const result = await engine.evaluate(prData);
+      expect(result.maintenance_alert).toBe("Custom maintenance message");
+    });
+
+    it("should use default maintenance message if none provided", async () => {
+      const prData: PRData = {
+        pull_request: {
+          title: "Implement new audit logging feature",
+          body: "Testing documented here.",
+          labels: ["feature", "trivial"],
+          base_branch: "develop",
+          head_branch: "feature/audit-logging",
+          number: 123,
+          author: "test-user",
+        },
+        files_modified: ["src/logging.ts"],
+        additions: 10,
+        deletions: 5,
+        maintenance_mode: true,
+      };
+
+      const result = await engine.evaluate(prData);
+      expect(result.maintenance_alert).toContain("scheduled maintenance");
+    });
+
+    it("should include maintenance notice in the report", async () => {
+      const prData: PRData = {
+        pull_request: {
+          title: "Implement new audit logging feature",
+          body: "Testing documented here.",
+          labels: ["feature", "trivial"],
+          base_branch: "develop",
+          head_branch: "feature/audit-logging",
+          number: 123,
+          author: "test-user",
+        },
+        files_modified: ["src/logging.ts"],
+        additions: 10,
+        deletions: 5,
+        maintenance_mode: true,
+        maintenance_message: "Maintenance in progress",
+      };
+
+      const result = await engine.evaluate(prData);
+      const report = engine.generateReport(result);
+      expect(report).toContain("MAINTENANCE NOTICE");
+      expect(report).toContain("Maintenance in progress");
+    });
+  });
 });

@@ -30,6 +30,8 @@ export interface PRData {
     current_version: string;
     latest_version: string;
   }>;
+  maintenance_mode?: boolean;
+  maintenance_message?: string;
 }
 
 export interface PolicyViolation {
@@ -47,6 +49,7 @@ export interface EvaluationResult {
   violations_count: number;
   warnings_count: number;
   high_severity_violations: PolicyViolation[];
+  maintenance_alert?: string;
 }
 
 /**
@@ -83,16 +86,26 @@ export class PolicyEngine {
    * Evaluate PR data against policies
    */
   async evaluate(prData: PRData): Promise<EvaluationResult> {
+    let result: EvaluationResult;
     if (!this.opaAvailable) {
-      return this.evaluateWithoutOPA(prData);
+      result = await this.evaluateWithoutOPA(prData);
+    } else {
+      try {
+        result = await this.evaluateWithOPA(prData);
+      } catch (error) {
+        console.error("[PolicyEngine] OPA evaluation failed:", error);
+        result = await this.evaluateWithoutOPA(prData);
+      }
     }
 
-    try {
-      return await this.evaluateWithOPA(prData);
-    } catch (error) {
-      console.error("[PolicyEngine] OPA evaluation failed:", error);
-      return this.evaluateWithoutOPA(prData);
+    // Add maintenance alert if enabled
+    if (prData.maintenance_mode) {
+      result.maintenance_alert =
+        prData.maintenance_message ||
+        "The relayer service is currently undergoing scheduled maintenance.";
     }
+
+    return result;
   }
 
   /**
@@ -321,6 +334,13 @@ export class PolicyEngine {
           : "❌";
     report += `## ${emoji} Policy Compliance Check\n\n`;
     report += `**Status:** ${result.status}\n\n`;
+
+    // Maintenance Alert
+    if (result.maintenance_alert) {
+      report += `> [!IMPORTANT]\n`;
+      report += `> ### 🚧 MAINTENANCE NOTICE\n`;
+      report += `> ${result.maintenance_alert}\n\n`;
+    }
 
     // Summary
     report += `${result.summary}\n\n`;
