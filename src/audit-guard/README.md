@@ -160,6 +160,37 @@ const report = engine.generateReport(result);
 console.log(report);
 ```
 
+## Log Backup Utility
+
+The audit-guard package includes a simple log backup and restore helper to preserve critical policy and compliance logs across sites.
+
+### Backup Usage
+
+```bash
+npm run backup -- ./logs /mnt/offsite/vero-log-backup
+```
+
+### Restore Usage
+
+```bash
+npm run restore -- /mnt/offsite/vero-log-backup ./logs-restored
+```
+
+### Remote Backup
+
+Remote destinations are supported using `rsync` syntax:
+
+```bash
+npm run backup -- ./logs user@example.com:/var/backups/vero-logs
+```
+
+### Environment Variables
+
+- `BACKUP_SOURCE` / `LOG_SRC`
+- `BACKUP_DEST` / `LOG_DEST`
+- `BACKUP_TARGET`
+- `--dry-run`
+
 ## PR Data Format
 
 ```json

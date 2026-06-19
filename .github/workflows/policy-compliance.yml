@@ -119,11 +119,9 @@ jobs:
             console.log('REPORT<<EOF\n' + report + '\nEOF');
             
             // Set status
-            const githubOutput = process.env.GITHUB_OUTPUT;
-            if (githubOutput) {
-              fs.appendFileSync(githubOutput, `status=${result.status}\n`);
-              fs.appendFileSync(githubOutput, `violations=${result.violations_count}\n`);
-            }
+            const fsOutput = require('fs');
+            fsOutput.appendFileSync(process.env.GITHUB_OUTPUT, `status=${result.status}\n`);
+            fsOutput.appendFileSync(process.env.GITHUB_OUTPUT, `violations=${result.violations_count}\n`);
             
             process.exit(result.violations.length > 0 ? 1 : 0);
           })().catch(e => {
@@ -172,6 +170,13 @@ jobs:
                 body += `  ${w.message}\n`;
                 body += `  > ${w.detail}\n\n`;
               }
+            }
+
+            // Add security tip
+            if (result.security_tip) {
+              body += '---\n';
+              body += `### 🎓 Security Training: ${result.security_tip.title}\n\n`;
+              body += `${result.security_tip.content}\n\n`;
             }
             
             // Add footer

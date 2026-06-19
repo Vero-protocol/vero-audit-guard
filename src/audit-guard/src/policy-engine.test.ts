@@ -360,72 +360,70 @@ Updated CHANGELOG.md with new feature.
     });
   });
 
-  describe("Maintenance Mode", () => {
-    it("should include maintenance alert in evaluation result when enabled", async () => {
+  describe("Security Training Tips", () => {
+    it("should include a security tip in the result", async () => {
       const prData: PRData = {
         pull_request: {
-          title: "Implement new audit logging feature",
-          body: "Testing documented here.",
-          labels: ["feature", "trivial"],
-          base_branch: "develop",
-          head_branch: "feature/audit-logging",
-          number: 123,
-          author: "test-user",
+          title: "Update dependencies",
+          body: "Updating npm packages",
+          labels: [],
+          base_branch: "main",
+          head_branch: "deps",
+          number: 100,
+          author: "bot",
         },
-        files_modified: ["src/logging.ts"],
-        additions: 10,
-        deletions: 5,
-        maintenance_mode: true,
-        maintenance_message: "Custom maintenance message",
+        files_modified: ["package.json"],
+        additions: 5,
+        deletions: 2,
       };
 
       const result = await engine.evaluate(prData);
-      expect(result.maintenance_alert).toBe("Custom maintenance message");
+      expect(result.security_tip).toBeDefined();
+      expect(result.security_tip?.title).toBe("Dependency Security");
     });
 
-    it("should use default maintenance message if none provided", async () => {
+    it("should include security training section in markdown report", async () => {
       const prData: PRData = {
         pull_request: {
-          title: "Implement new audit logging feature",
-          body: "Testing documented here.",
-          labels: ["feature", "trivial"],
-          base_branch: "develop",
-          head_branch: "feature/audit-logging",
-          number: 123,
-          author: "test-user",
+          title: "Fix login bug",
+          body: "Refactored the auth logic",
+          labels: [],
+          base_branch: "main",
+          head_branch: "auth-fix",
+          number: 101,
+          author: "dev",
         },
-        files_modified: ["src/logging.ts"],
-        additions: 10,
-        deletions: 5,
-        maintenance_mode: true,
-      };
-
-      const result = await engine.evaluate(prData);
-      expect(result.maintenance_alert).toContain("scheduled maintenance");
-    });
-
-    it("should include maintenance notice in the report", async () => {
-      const prData: PRData = {
-        pull_request: {
-          title: "Implement new audit logging feature",
-          body: "Testing documented here.",
-          labels: ["feature", "trivial"],
-          base_branch: "develop",
-          head_branch: "feature/audit-logging",
-          number: 123,
-          author: "test-user",
-        },
-        files_modified: ["src/logging.ts"],
-        additions: 10,
-        deletions: 5,
-        maintenance_mode: true,
-        maintenance_message: "Maintenance in progress",
+        files_modified: ["src/auth.ts"],
+        additions: 20,
+        deletions: 10,
       };
 
       const result = await engine.evaluate(prData);
       const report = engine.generateReport(result);
-      expect(report).toContain("MAINTENANCE NOTICE");
-      expect(report).toContain("Maintenance in progress");
+
+      expect(report).toContain("### 🎓 Security Training");
+      expect(report).toContain("Authentication & Authorization");
+    });
+
+    it("should fallback to a default tip based on PR number", async () => {
+      const prData: PRData = {
+        pull_request: {
+          title: "Generic change",
+          body: "Doing some work",
+          labels: [],
+          base_branch: "main",
+          head_branch: "work",
+          number: 0, // Should map to first tip
+          author: "dev",
+        },
+        files_modified: ["README.md"],
+        additions: 1,
+        deletions: 1,
+      };
+
+      const result = await engine.evaluate(prData);
+      expect(result.security_tip).toBeDefined();
+      expect(result.security_tip?.id).toBe("SEC_TIP_SECRET_MGMT");
     });
   });
 });
