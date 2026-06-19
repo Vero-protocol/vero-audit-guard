@@ -11,6 +11,7 @@ on:
 permissions:
   contents: read
   pull-requests: write
+  statuses: write
 
 jobs:
   policy-check:
@@ -108,8 +109,9 @@ jobs:
             console.log('REPORT<<EOF\n' + report + '\nEOF');
             
             // Set status
-            console.log(`::set-output name=status::${result.status}`);
-            console.log(`::set-output name=violations::${result.violations_count}`);
+            const fsOutput = require('fs');
+            fsOutput.appendFileSync(process.env.GITHUB_OUTPUT, `status=${result.status}\n`);
+            fsOutput.appendFileSync(process.env.GITHUB_OUTPUT, `violations=${result.violations_count}\n`);
             
             process.exit(result.violations.length > 0 ? 1 : 0);
           })().catch(e => {
@@ -148,6 +150,13 @@ jobs:
                 body += `  ${w.message}\n`;
                 body += `  > ${w.detail}\n\n`;
               }
+            }
+
+            // Add security tip
+            if (result.security_tip) {
+              body += '---\n';
+              body += `### 🎓 Security Training: ${result.security_tip.title}\n\n`;
+              body += `${result.security_tip.content}\n\n`;
             }
             
             // Add footer
