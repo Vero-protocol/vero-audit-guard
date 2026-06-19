@@ -7,6 +7,9 @@ export interface BackupOptions {
 }
 
 export function isRemoteDestination(destination: string): boolean {
+  if (/^[a-zA-Z]:[\\/]/.test(destination)) {
+    return false;
+  }
   return (
     destination.startsWith("rsync://") ||
     destination.startsWith("ssh://") ||

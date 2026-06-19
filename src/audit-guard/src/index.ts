@@ -10,6 +10,8 @@ export type {
   EvaluationResult,
 } from "./policy-engine";
 
+export { IPTracker } from "./ip-tracker";
+
 // Re-export for convenience
 import PolicyEngine from "./policy-engine";
 export default PolicyEngine;
