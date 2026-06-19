@@ -51,6 +51,10 @@ export class EventPropagator {
     if (this.timer) clearTimeout(this.timer);
   }
 
+  isRunning(): boolean {
+    return this.running;
+  }
+
   private poll(): void {
     this.fetchAndEmit()
       .catch(err => console.error("[EventPropagator] poll error:", err))
