@@ -14,6 +14,12 @@ beforeEach(() => {
   resetState();
   threatFetcher.clearMockThreats();
   threatFetcher.clearCache();
+  // Mock the updateFeed method to prevent network calls during tests
+  jest.spyOn(threatFetcher, 'updateFeed').mockResolvedValue(undefined);
+});
+
+afterEach(() => {
+  jest.restoreAllMocks();
 });
 
 describe("anomaly-detector", () => {
