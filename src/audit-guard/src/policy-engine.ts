@@ -51,6 +51,7 @@ export interface EvaluationResult {
   warnings_count: number;
   high_severity_violations: PolicyViolation[];
   security_tip?: SecurityTip;
+  maintenance_alert?: string;
 }
 
 /**
@@ -135,6 +136,13 @@ export class PolicyEngine {
 
     // Add security tip to result
     result.security_tip = this.getSecurityTip(prData);
+
+    // Surface a maintenance-mode banner if the relayer/PR is in maintenance.
+    if (prData.maintenance_mode) {
+      result.maintenance_alert =
+        prData.maintenance_message ||
+        "Maintenance mode enabled — review automated checks before merge.";
+    }
     return result;
   }
 

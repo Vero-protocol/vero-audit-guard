@@ -377,6 +377,85 @@ Enable debug output:
 DEBUG=* npm run evaluate ./pr-data.json
 ```
 
+## Logic Error Detection (Issue #16)
+
+The `LogicErrorDetector` ships as an extensible pattern library for
+finding common logic bugs in source code: reentrancy risk, unbounded
+loops, integer overflow risk, hardcoded private keys, use of `eval`,
+assertion-instead-of-require, and more.
+
+```typescript
+import { LogicErrorDetector } from "@vero/audit-guard-policy-engine";
+
+const detector = new LogicErrorDetector();
+const result = detector.scan(sourceCode, { file: "contract.sol" });
+
+if (result.status === "VULNERABLE") {
+  for (const f of result.findings) {
+    console.log(`[${f.severity}] ${f.ruleId} on line ${f.line}: ${f.message}`);
+  }
+}
+```
+
+### Patterns (issue #16)
+
+| Pattern ID | Severity | Description |
+|------------|----------|-------------|
+| `REENTRANCY_RISK` | HIGH | External (low-level) call followed by a balance/state write |
+| `INTEGER_OVERFLOW_RAW` | MEDIUM | Large numeric literal assigned to a sized integer |
+| `UNBOUNDED_LOOP` | HIGH / MEDIUM | `while(true)` / `for(;;)` / for-loop over a dynamic `.length` |
+| `MISSING_ZERO_ADDRESS_CHECK` | MEDIUM | `.transfer(...)` without an upstream zero-address guard |
+| `HARDCODED_PRIVATE_KEY` | CRITICAL | 32-byte (64-char hex) literal anywhere in the source |
+| `ASSERT_VS_REQUIRE` | MEDIUM | `assert(...)` used for input validation |
+| `TODO_SECURITY` | MEDIUM | TODO/FIXME containing a security keyword |
+| `UNCHECKED_RETURN_VALUE` | HIGH | Low-level call whose return value is discarded |
+| `TX_ORIGIN_AUTHORIZATION` | HIGH | `tx.origin` used in an authorization check |
+| `EVAL_USAGE` | CRITICAL | Call to `eval()` |
+| `HARDCODED_API_KEY_LITERAL` | HIGH | API key / secret literal in source |
+
+Run a single sample to see all that fire on a deliberately-bad Solidity
+fragment:
+
+```typescript
+const detector = new LogicErrorDetector();
+const result = detector.scan(`
+function withdraw(uint amount) public {
+  (bool ok,) = msg.sender.call{value: amount}("");
+  balances[msg.sender] = 0;
+}
+`);
+console.log(detector.generateReport(result));
+```
+
+### Restrict to a subset of patterns
+
+```typescript
+const result = detector.scan(sourceCode, {
+  patterns: ["REENTRANCY_RISK", "UNCHECKED_RETURN_VALUE"],
+});
+```
+
+### CLI
+
+```bash
+# Scan a file and print the markdown report + raw result JSON
+node dist/cli.js detect-logic ./contract.sol
+
+# Restrict to two patterns and write a markdown report to ./report.md
+LOGIC_PATTERN_FILTER=REENTRANCY_RISK,UNCHECKED_RETURN_VALUE \
+  REPORT_FILE=./report.md \
+  node dist/cli.js detect-logic ./contract.sol
+```
+
+Exit code is `1` when `result.status === "VULNERABLE"`, so the command
+can be wired directly into CI gates.
+
+### OPA/Rego Integration
+
+The pattern library has a coarse `policies/logic_errors.rego` mirror for
+orgs that prefer to centralise policy in OPA. The TypeScript engine
+remains authoritative for the fine-grained heuristics.
+
 ## Performance
 
 - **Evaluation:** < 100ms for typical PRs
