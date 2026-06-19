@@ -95,8 +95,9 @@ fn main() {
     println!("{}", out);
 
     // Write report to /reports directory
-    let report_dir = Path::new("../reports");
-    fs::create_dir_all(report_dir).ok();
+    let root_dir = env::current_dir().unwrap();
+    let report_dir = root_dir.join("reports");
+    fs::create_dir_all(&report_dir).ok();
     let report_path = report_dir.join("latest-scan.json");
     fs::write(&report_path, &out).expect("Failed to write report");
     eprintln!("[scanner] Report written to {}", report_path.display());

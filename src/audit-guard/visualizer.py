@@ -13,7 +13,12 @@ def scan_locks(directory):
     # Heuristic for shared locks in Rust/TS/Py
     lock_pattern = re.compile(r'(\w+)\.lock\(\)')
     
-    for root, _, files in os.walk(directory):
+    for root, dirs, files in os.walk(directory):
+        # Skip node_modules and .git to avoid performance issues
+        if 'node_modules' in dirs:
+            dirs.remove('node_modules')
+        if '.git' in dirs:
+            dirs.remove('.git')
         for file in files:
             if file.endswith('.rs') or file.endswith('.ts') or file.endswith('.py') or file.endswith('.js'):
                 path = os.path.join(root, file)

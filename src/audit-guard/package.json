@@ -10,7 +10,8 @@
     "test:watch": "jest --watch",
     "lint": "eslint src --ext .ts",
     "evaluate": "ts-node src/cli.ts",
-    "check-pr": "ts-node src/cli.ts pr"
+    "check-pr": "ts-node src/cli.ts pr",
+    "gen-docs:fv": "python3 scripts/generate-fv-report.py"
   },
   "keywords": [
     "opa",
