@@ -1,118 +1,256 @@
-//! FSM verification tests for governance proposal state transitions.
-//!
-//! This module validates that the proposal state machine enforces valid
-//! transitions and rejects invalid state transition attempts.
+//! Governance tests — state machine transitions and anti-Sybil stake gate.
 
 #[cfg(test)]
 mod tests {
-    use crate::governance::{self, GovError};
+    use crate::governance;
     use crate::types::{Proposal, ProposalState};
-    use soroban_sdk::{BytesN, Env};
+    use soroban_sdk::{
+        contract, contractimpl,
+        testutils::{Address as _, Ledger},
+        vec, Address, BytesN, Env,
+    };
 
-    /// Test: Proposal starts in Pending state
-    #[test]
-    fn test_proposal_initial_state_pending() {
-        // When a proposal is created, it should be in Pending state
-        // Verified in: governance::propose() → proposal.state = ProposalState::Pending
+    // ── minimal stub contract so we can call env.as_contract() ──────────────
+
+    #[contract]
+    struct GovContract;
+
+    #[contractimpl]
+    impl GovContract {}
+
+    // ── helpers ──────────────────────────────────────────────────────────────
+
+    fn register_contract(env: &Env) -> Address {
+        env.register_contract(None, GovContract)
     }
 
-    /// Test: Pending → Approved transition on threshold met
-    #[test]
-    fn test_state_transition_pending_to_approved() {
-        // GIVEN: A proposal in Pending state with N-1 approvals
-        // WHEN: The Nth approval is received (threshold met)
-        // THEN: State should transition to Approved
-        // AND: "GOV/approved" event should be emitted
-        // Verified in: governance::approve() → state auto-transitions when threshold met
+    fn register_token(env: &Env) -> Address {
+        env.register_stellar_asset_contract_v2(Address::generate(env))
+            .address()
     }
 
-    /// Test: Approved → Executed transition on timelock expiry
-    #[test]
-    fn test_state_transition_approved_to_executed() {
-        // GIVEN: A proposal in Approved state
-        // AND: Current ledger >= unlock_ledger
-        // WHEN: execute() is called
-        // THEN: State should transition to Executed
-        // AND: "GOV/execute" event should be emitted
-        // Verified in: governance::execute() → prop.state = ProposalState::Executed
+    fn fund(env: &Env, token: &Address, to: &Address, amount: i128) {
+        soroban_sdk::token::StellarAssetClient::new(env, token)
+            .mock_all_auths()
+            .mint(to, &amount);
     }
 
-    /// Test: Rejecting approvals on Approved proposals (invalid transition)
-    #[test]
-    fn test_reject_approval_on_approved_proposal() {
-        // GIVEN: A proposal in Approved state
-        // WHEN: approve() is called on that proposal
-        // THEN: Must panic with InvalidStateTransition
-        // Verified in: governance::approve() → checks prop.state != Pending
+    fn dummy_hash(env: &Env) -> BytesN<32> {
+        BytesN::from_array(env, &[0u8; 32])
     }
 
-    /// Test: Rejecting execution of Pending proposals
-    #[test]
-    fn test_reject_execution_of_pending_proposal() {
-        // GIVEN: A proposal in Pending state (threshold not met)
-        // WHEN: execute() is called
-        // THEN: Must panic with InvalidStateTransition
-        // Verified in: governance::execute() → checks prop.state == Approved
+    fn make_proposal(env: &Env, id: u64, proposer: &Address) -> Proposal {
+        Proposal {
+            id,
+            action_hash: dummy_hash(env),
+            proposer: proposer.clone(),
+            approved_by: vec![env],
+            state: ProposalState::Pending,
+        }
     }
 
-    /// Test: Rejecting double-execution of Executed proposals
-    #[test]
-    fn test_reject_double_execution() {
-        // GIVEN: A proposal in Executed state
-        // WHEN: execute() is called again
-        // THEN: Must panic with InvalidStateTransition
-        // Verified in: governance::execute() → checks prop.state == Approved
+    /// Init with one signer + optional stake gate. Returns (contract_id, token_address).
+    fn init_one(env: &Env, signer: &Address, min_stake: i128) -> (Address, Address) {
+        let cid = register_contract(env);
+        let token = register_token(env);
+        env.as_contract(&cid, || {
+            governance::init(env, vec![env, signer.clone()], 1, token.clone(), min_stake);
+        });
+        (cid, token)
     }
 
-    /// Test: Rejecting approval of Executed proposals
-    #[test]
-    fn test_reject_approval_of_executed_proposal() {
-        // GIVEN: A proposal in Executed state
-        // WHEN: approve() is called on that proposal
-        // THEN: Must panic with InvalidStateTransition
-        // Verified in: governance::approve() → checks prop.state == Pending
+    /// Init with two signers, threshold=2, no stake gate. Returns contract_id.
+    fn init_two(env: &Env, a: &Address, b: &Address) -> Address {
+        let cid = register_contract(env);
+        env.as_contract(&cid, || {
+            governance::init(
+                env,
+                vec![env, a.clone(), b.clone()],
+                2,
+                register_token(env),
+                0,
+            );
+        });
+        cid
     }
 
-    /// Test: Full lifecycle - Pending → Approved → Executed
+    // ── anti-Sybil stake gate ─────────────────────────────────────────────
+
     #[test]
-    fn test_full_proposal_lifecycle() {
-        // GIVEN: A freshly created proposal (state = Pending)
-        // WHEN: Approvals are collected until threshold
-        // THEN: State transitions to Approved
-        // AND: "GOV/approved" event is emitted
-        // WHEN: Timelock expires and execute() is called
-        // THEN: State transitions to Executed
-        // AND: "GOV/execute" event is emitted
-        // All transitions are validated by governance module
+    fn test_approve_passes_with_sufficient_stake() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let signer = Address::generate(&env);
+        let (cid, token) = init_one(&env, &signer, 1_000);
+        fund(&env, &token, &signer, 1_000);
+
+        env.as_contract(&cid, || {
+            let id = governance::propose(&env, make_proposal(&env, 1, &signer));
+            governance::approve(&env, &signer, id);
+            let state = env
+                .storage()
+                .instance()
+                .get::<_, soroban_sdk::Map<u64, (Proposal, u32)>>(
+                    &soroban_sdk::symbol_short!("PROPS"),
+                )
+                .unwrap()
+                .get(id)
+                .unwrap()
+                .0
+                .state;
+            assert_eq!(state, ProposalState::Approved);
+        });
     }
 
-    /// Test: Error code for invalid transitions
     #[test]
-    fn test_invalid_transition_error_code() {
-        // InvalidStateTransition error code = 5
-        // (replaces the removed AlreadyExecuted error)
-        // Verified in: GovError::InvalidStateTransition = 5
+    #[should_panic(expected = "Error(Contract, #7)")]
+    fn test_approve_fails_with_insufficient_stake() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let signer = Address::generate(&env);
+        let (cid, token) = init_one(&env, &signer, 1_000);
+        fund(&env, &token, &signer, 999); // one short
+
+        env.as_contract(&cid, || {
+            let id = governance::propose(&env, make_proposal(&env, 1, &signer));
+            governance::approve(&env, &signer, id); // InsufficientStake = 7
+        });
     }
 
-    /// Test: Duplicate approval check still works after state changes
     #[test]
-    fn test_duplicate_approval_detection() {
-        // GIVEN: A proposal in Pending state with one approval from Alice
-        // WHEN: approve() is called again by Alice
-        // THEN: Must panic with AlreadyApproved (not state-related)
-        // Verified in: governance::approve() → checks approved_by.contains(signer)
+    fn test_stake_gate_disabled_when_min_stake_zero() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let signer = Address::generate(&env);
+        let (cid, _) = init_one(&env, &signer, 0); // no tokens needed
+
+        env.as_contract(&cid, || {
+            let id = governance::propose(&env, make_proposal(&env, 1, &signer));
+            governance::approve(&env, &signer, id); // must not panic
+            let state = env
+                .storage()
+                .instance()
+                .get::<_, soroban_sdk::Map<u64, (Proposal, u32)>>(
+                    &soroban_sdk::symbol_short!("PROPS"),
+                )
+                .unwrap()
+                .get(id)
+                .unwrap()
+                .0
+                .state;
+            assert_eq!(state, ProposalState::Approved);
+        });
+    }
+
+    // ── state machine ─────────────────────────────────────────────────────
+
+    #[test]
+    fn test_full_lifecycle() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let a = Address::generate(&env);
+        let b = Address::generate(&env);
+        let cid = init_two(&env, &a, &b);
+
+        env.as_contract(&cid, || {
+            let id = governance::propose(&env, make_proposal(&env, 1, &a));
+
+            governance::approve(&env, &a, id);
+            assert_eq!(
+                env.storage()
+                    .instance()
+                    .get::<_, soroban_sdk::Map<u64, (Proposal, u32)>>(
+                        &soroban_sdk::symbol_short!("PROPS"),
+                    )
+                    .unwrap()
+                    .get(id)
+                    .unwrap()
+                    .0
+                    .state,
+                ProposalState::Pending
+            );
+
+            governance::approve(&env, &b, id);
+            assert_eq!(
+                env.storage()
+                    .instance()
+                    .get::<_, soroban_sdk::Map<u64, (Proposal, u32)>>(
+                        &soroban_sdk::symbol_short!("PROPS"),
+                    )
+                    .unwrap()
+                    .get(id)
+                    .unwrap()
+                    .0
+                    .state,
+                ProposalState::Approved
+            );
+
+            env.ledger().with_mut(|l| l.sequence_number += 721);
+            let prop = governance::execute(&env, id);
+            assert_eq!(prop.state, ProposalState::Executed);
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #5)")]
+    fn test_execute_pending_proposal_rejected() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let a = Address::generate(&env);
+        let cid = init_two(&env, &a, &Address::generate(&env));
+
+        env.as_contract(&cid, || {
+            let id = governance::propose(&env, make_proposal(&env, 1, &a));
+            governance::execute(&env, id); // InvalidStateTransition = 5
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #4)")]
+    fn test_execute_before_timelock_rejected() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let signer = Address::generate(&env);
+        let (cid, _) = init_one(&env, &signer, 0);
+
+        env.as_contract(&cid, || {
+            let id = governance::propose(&env, make_proposal(&env, 1, &signer));
+            governance::approve(&env, &signer, id); // → Approved
+            governance::execute(&env, id); // TimelockActive = 4
+        });
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_duplicate_approval_rejected() {
+        // The second approve by the same signer must panic. In the test environment
+        // mock_all_auths() consumes the auth token on the first call, so the second
+        // call raises Error(Auth, ExistingValue) before reaching AlreadyApproved — both
+        // are correct rejections of a duplicate approval attempt.
+        let env = Env::default();
+        env.mock_all_auths();
+        let a = Address::generate(&env);
+        let cid = init_two(&env, &a, &Address::generate(&env));
+
+        env.as_contract(&cid, || {
+            let id = governance::propose(&env, make_proposal(&env, 1, &a));
+            governance::approve(&env, &a, id);
+            governance::approve(&env, &a, id); // must panic
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #1)")]
+    fn test_non_signer_cannot_approve() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let a = Address::generate(&env);
+        let outsider = Address::generate(&env);
+        let cid = init_two(&env, &a, &Address::generate(&env));
+
+        env.as_contract(&cid, || {
+            let id = governance::propose(&env, make_proposal(&env, 1, &a));
+            governance::approve(&env, &outsider, id); // NotASigner = 1
+        });
     }
 }
-
-/// State Transition Matrix (for documentation)
-///
-/// | Current State | Operation | Target State | Allowed | Error |
-/// |---|---|---|---|---|
-/// | Pending | approve (< threshold) | Pending | Yes | — |
-/// | Pending | approve (>= threshold) | Approved | Yes | — |
-/// | Pending | execute | — | No | InvalidStateTransition |
-/// | Approved | approve | — | No | InvalidStateTransition |
-/// | Approved | execute (timelock OK) | Executed | Yes | — |
-/// | Approved | execute (timelock active) | — | No | TimelockActive |
-/// | Executed | approve | — | No | InvalidStateTransition |
-/// | Executed | execute | — | No | InvalidStateTransition |

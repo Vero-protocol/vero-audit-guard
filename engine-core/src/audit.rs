@@ -4,7 +4,7 @@
 //! Off-chain provers submit `StateCommitment`s; this module verifies ordering
 //! and hash integrity before they are persisted.
 
-use soroban_sdk::{contracttype, panic_with_error, symbol_short, Env, Symbol};
+use soroban_sdk::{contracterror, panic_with_error, symbol_short, Env, Symbol};
 use sha2::{Digest, Sha256};
 
 use crate::types::StateCommitment;
@@ -12,7 +12,7 @@ use crate::types::StateCommitment;
 const KEY_SEQ:  Symbol = symbol_short!("SEQ");
 const KEY_PREV: Symbol = symbol_short!("PREV_H");
 
-#[contracttype]
+#[contracterror]
 #[derive(Copy, Clone)]
 pub enum AuditError {
     ReplayedSequence  = 1,

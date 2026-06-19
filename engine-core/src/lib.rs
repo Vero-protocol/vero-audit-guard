@@ -5,3 +5,5 @@ pub mod treasury;
 pub mod burn;
 pub mod types;
 
+#[cfg(test)]
+mod governance_tests;
