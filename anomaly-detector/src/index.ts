@@ -6,6 +6,8 @@
  *   - Unauthorized address interactions
  *   - Threat feed matches
  */
+import * as fs from "fs";
+import * as path from "path";
 
 import { ThreatFeedFetcher } from "./audit-guard/threat-feed-fetcher";
 
@@ -34,15 +36,43 @@ const NONCE_SPIKE_THRESHOLD = Number(process.env.NONCE_SPIKE_THRESHOLD ?? 50);
 const FAILED_TX_THRESHOLD = Number(process.env.FAILED_TX_THRESHOLD ?? 10);
 const POLL_INTERVAL_MS = Number(process.env.POLL_INTERVAL_MS ?? 5000);
 
-const previousNonces = new Map<string, number>();
+const DB_PATH = path.join(__dirname, "nonce-db.json");
+const previousNonces = new Map<string, number>(loadNonces());
 const alerts: AnomalyAlert[] = [];
+
+function loadNonces(): [string, number][] {
+  try {
+    const data = fs.readFileSync(DB_PATH, "utf-8");
+    const obj = JSON.parse(data) as Record<string, number>;
+    return Object.entries(obj);
+  } catch {
+    return [];
+  }
+}
+
+function saveNonces(): void {
+  const obj: Record<string, number> = {};
+  for (const [addr, nonce] of previousNonces.entries()) {
+    obj[addr] = nonce;
+  }
+  fs.writeFileSync(DB_PATH, JSON.stringify(obj, null, 2));
+}
 
 function analyze(metrics: RelayerMetrics[]): AnomalyAlert[] {
   const detected: AnomalyAlert[] = [];
 
   for (const m of metrics) {
-    // Nonce spike detection
     const prevNonce = previousNonces.get(m.address) ?? m.nonce;
+    // Nonce reuse detection
+    if (previousNonces.has(m.address) && m.nonce <= prevNonce) {
+      detected.push({
+        type: "NONCE_REUSE",
+        severity: "HIGH",
+        address: m.address,
+        detail: `Nonce reuse detected (prev: ${prevNonce}, now: ${m.nonce})`,
+        timestamp: m.timestamp,
+      });
+    }
     const nonceDelta = m.nonce - prevNonce;
     if (nonceDelta > NONCE_SPIKE_THRESHOLD) {
       detected.push({
@@ -89,7 +119,8 @@ function analyze(metrics: RelayerMetrics[]): AnomalyAlert[] {
     }
   }
 
-  return detected;
+    saveNonces();
+    return detected;
 }
 
 async function fetchMetrics(): Promise<RelayerMetrics[]> {

@@ -43,5 +43,12 @@ describe("anomaly-detector", () => {
     );
     expect(spikeOrBurst.length).toBe(0);
   });
+  it("detects nonce reuse", async () => {
+    // First, set a baseline nonce
+    await runOnce([{ ...base, nonce: 100 }]);
+    // Then send a lower or equal nonce to trigger reuse detection
+    const alerts = await runOnce([{ ...base, nonce: 90 }]);
+    expect(alerts.some((a) => a.type === "NONCE_REUSE")).toBe(true);
+  });
 });
 
