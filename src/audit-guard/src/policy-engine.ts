@@ -47,6 +47,7 @@ export interface EvaluationResult {
   violations_count: number;
   warnings_count: number;
   high_severity_violations: PolicyViolation[];
+  anchored_tx?: string;
 }
 
 /**
@@ -343,6 +344,13 @@ export class PolicyEngine {
         report += `  ${warning.message}\n`;
         report += `  _${warning.detail}_\n\n`;
       }
+    }
+
+    // Anchoring info
+    if (result.anchored_tx) {
+      report += "### 🔗 Immutable Audit Trail\n\n";
+      report += `This audit report has been anchored to the Stellar ledger for immutability.\n`;
+      report += `**Transaction Hash:** \`${result.anchored_tx}\`\n\n`;
     }
 
     // Compliance tip

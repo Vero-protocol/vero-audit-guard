@@ -5,6 +5,7 @@
 
 import * as fs from "fs";
 import PolicyEngine, { PRData } from "./policy-engine";
+import AuditTrail from "./audit-trail";
 
 async function main() {
   const args = process.argv.slice(2);
@@ -33,6 +34,21 @@ async function checkPR(): Promise<void> {
   const prData: PRData = JSON.parse(fs.readFileSync(prDataPath, "utf-8"));
   const engine = new PolicyEngine();
   const result = await engine.evaluate(prData);
+
+  // On-chain anchoring
+  if (process.env.ANCHOR_ON_CHAIN === "true") {
+    console.log("🔗 Anchoring audit report on-chain...");
+    try {
+      const trail = new AuditTrail();
+      const txHash = await trail.anchor(result, prData.pull_request.number);
+      console.log(`✅ Audit report anchored. Stellar TX: ${txHash}`);
+
+      // Add anchoring info to result for the report
+      (result as any).anchored_tx = txHash;
+    } catch (error: any) {
+      console.error(`❌ Anchoring failed: ${error.message}`);
+    }
+  }
 
   // Output result
   console.log(JSON.stringify(result, null, 2));

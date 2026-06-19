@@ -62,6 +62,8 @@ jobs:
           EOF
 
         env:
+          ANCHOR_ON_CHAIN: "true"
+          AUDIT_KEYPAIR_SECRET: ${{ secrets.AUDIT_KEYPAIR_SECRET }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body }}
           PR_LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
@@ -89,6 +91,7 @@ jobs:
         run: |
           node <<'EOF'
           const PolicyEngine = require('./dist/policy-engine').default;
+          const AuditTrail = require('./dist/audit-trail').default;
           const fs = require('fs');
           
           // Load PR data
@@ -99,6 +102,19 @@ jobs:
           const engine = new PolicyEngine();
           (async () => {
             const result = await engine.evaluate(prData);
+
+            // On-chain anchoring
+            if (process.env.ANCHOR_ON_CHAIN === 'true' && process.env.AUDIT_KEYPAIR_SECRET) {
+              console.log('🔗 Anchoring audit report on-chain...');
+              try {
+                const trail = new AuditTrail();
+                const txHash = await trail.anchor(result, prData.pull_request.number);
+                console.log(`✅ Audit report anchored. Stellar TX: ${txHash}`);
+                result.anchored_tx = txHash;
+              } catch (error) {
+                console.error(`❌ Anchoring failed: ${error.message}`);
+              }
+            }
             
             // Save result
             fs.writeFileSync('/tmp/policy-result.json', JSON.stringify(result, null, 2));
@@ -108,8 +124,10 @@ jobs:
             console.log('REPORT<<EOF\n' + report + '\nEOF');
             
             // Set status
-            console.log(`::set-output name=status::${result.status}`);
-            console.log(`::set-output name=violations::${result.violations_count}`);
+            if (process.env.GITHUB_OUTPUT) {
+              fs.appendFileSync(process.env.GITHUB_OUTPUT, `status=${result.status}\n`);
+              fs.appendFileSync(process.env.GITHUB_OUTPUT, `violations=${result.violations_count}\n`);
+            }
             
             process.exit(result.violations.length > 0 ? 1 : 0);
           })().catch(e => {
@@ -118,6 +136,9 @@ jobs:
           });
           EOF
         working-directory: src/audit-guard
+        env:
+          ANCHOR_ON_CHAIN: "true"
+          AUDIT_KEYPAIR_SECRET: ${{ secrets.AUDIT_KEYPAIR_SECRET }}
 
       - name: Comment PR with policy result
         if: always()
