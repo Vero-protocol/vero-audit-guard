@@ -7,7 +7,7 @@ import { execSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
 import { SecurityTip, SECURITY_TIPS } from "./security-tips";
-
+import { sendAlert } from "./webhook";
 export interface PRData {
   pull_request: {
     title: string;
@@ -371,6 +371,12 @@ export class PolicyEngine {
       report += `> [!IMPORTANT]\n`;
       report += `> ### 🚧 MAINTENANCE NOTICE\n`;
       report += `> ${result.maintenance_alert}\n\n`;
+      // Send alert via webhook
+      void sendAlert({
+        repository: "unknown",
+        alert: result.maintenance_alert,
+        timestamp: new Date().toISOString(),
+      });
     }
 
     // Summary
