@@ -6,7 +6,7 @@
   "types": "dist/index.d.ts",
   "scripts": {
     "build": "tsc",
-    "build:ui": "esbuild src/ui/BreakerButton.tsx --bundle --minify --outfile=dist/ui/breaker.js --loader:.css=text",
+    "build:ui": "esbuild src/ui/*.tsx --bundle --minify --outdir=dist/ui --loader:.css=text",
     "test": "jest",
     "test:watch": "jest --watch",
     "lint": "eslint src --ext .ts",
