@@ -4,10 +4,12 @@
  */
 
 import { execSync } from "child_process";
+import { performance } from "perf_hooks";
 import * as fs from "fs";
 import * as path from "path";
 import { SecurityTip, SECURITY_TIPS } from "./security-tips";
-
+import { getNextReportVersion } from "./report-version";
+import { sendAlert } from "./webhook";
 export interface PRData {
   pull_request: {
     title: string;
@@ -121,6 +123,7 @@ export class PolicyEngine {
    * Evaluate PR data against policies
    */
   async evaluate(prData: PRData): Promise<EvaluationResult> {
+    const start = performance.now();
     let result: EvaluationResult;
 
     if (!this.opaAvailable) {
@@ -371,6 +374,7 @@ export class PolicyEngine {
           ? "⚠️"
           : "❌";
     report += `## ${emoji} Policy Compliance Check\n\n`;
+    report += `### Report Version: ${getNextReportVersion()}\n\n`;
     report += `**Status:** ${result.status}\n\n`;
 
     // Maintenance Alert
@@ -378,6 +382,12 @@ export class PolicyEngine {
       report += `> [!IMPORTANT]\n`;
       report += `> ### 🚧 MAINTENANCE NOTICE\n`;
       report += `> ${result.maintenance_alert}\n\n`;
+      // Send alert via webhook
+      void sendAlert({
+        repository: "unknown",
+        alert: result.maintenance_alert,
+        timestamp: new Date().toISOString(),
+      });
     }
 
     // Summary

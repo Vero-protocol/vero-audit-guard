@@ -33,4 +33,5 @@ export type {
 // Re-export the evaluated PolicyEngine as the package-default for
 // backwards-compat with existing callers.
 import PolicyEngine from "./policy-engine";
+export { BountyForm } from "./ui/BountyForm";
 export default PolicyEngine;
