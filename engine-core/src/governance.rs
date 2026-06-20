@@ -1,21 +1,19 @@
-//! Multi-sig governance hooks — treasury and upgrade decision gating.
-//!
-//! A `Proposal` requires `threshold` distinct approvals before `execute`
-//! can be called. The time-lock window enforces a mandatory delay between
-//! full approval and execution, giving stakeholders a veto window.
-//!
-//! ## Proposal State Machine
-//! ```text
-//! Pending -- (on approve, threshold met) -> Approved -- (on execute, timelock elapsed) -> Executed
-//! ```
-//! Invalid transitions trigger contract panics.
+use crate::types::Proposal;
+use soroban_sdk::{contract, contractimpl, Address, Env, BytesN, Symbol, Vec};
 
 use soroban_sdk::{
     contracterror, panic_with_error, symbol_short, token, vec, Address, Env, Map, Symbol, BytesN, Vec, Val,
 };
 use crate::event_utils::publish_event;
 
-use crate::types::{Proposal, ProposalState};
+#[contractimpl]
+impl Governance {
+    pub fn propose(
+        env: Env,
+        proposer: Address,
+        action_hash: BytesN<32>,
+    ) -> u64 {
+        proposer.require_auth();
 
 const KEY_PROPOSALS:  Symbol = symbol_short!("PROPS");
 const KEY_SIGNERS:    Symbol = symbol_short!("SIGNERS");
@@ -25,17 +23,13 @@ const KEY_STAKE_TOK:  Symbol = symbol_short!("STKTOK");
 /// Ledgers to wait after full approval before execution (~1 hour on Stellar).
 const TIMELOCK_LEDGERS: u32 = 720;
 
-#[contracterror]
-#[derive(Copy, Clone)]
-pub enum GovError {
-    NotASigner             = 1,
-    AlreadyApproved        = 2,
-    ThresholdNotMet        = 3,
-    TimelockActive         = 4,
-    InvalidStateTransition = 5,
-    ProposalNotFound       = 6,
-    InsufficientStake      = 7,
-}
+        let proposal = Proposal {
+            id: next_id,
+            proposer,
+            action_hash,
+            approved_by: Vec::new(&env),
+            state: 0, 
+        };
 
 /// Initialise governance with an ordered signer set, approval threshold, and
 /// anti-Sybil stake parameters.
@@ -59,15 +53,7 @@ pub fn init(
     env.storage().instance().set(&KEY_PROPOSALS, &empty);
 }
 
-fn load_proposals(env: &Env) -> Map<u64, (Proposal, u32)> {
-    env.storage().instance().get(&KEY_PROPOSALS).unwrap_or(Map::new(env))
-}
-
-/// Submit a new proposal. Returns the assigned proposal id.
-pub fn propose(env: &Env, mut proposal: Proposal) -> u64 {
-    let signers: Vec<Address> = env.storage().instance().get(&KEY_SIGNERS).unwrap_or(vec![env]);
-    if !signers.contains(&proposal.proposer) {
-        panic_with_error!(env, GovError::NotASigner);
+        next_id
     }
     // Initialize state to Pending
     proposal.state = ProposalState::Pending;
@@ -88,25 +74,14 @@ pub fn propose(env: &Env, mut proposal: Proposal) -> u64 {
     proposal.id
 }
 
-/// Record a signer's approval for `proposal_id`.
-/// The signer must hold at least `min_stake` tokens to prevent Sybil voting.
-/// Transitions state from Pending → Approved when threshold is met.
-pub fn approve(env: &Env, signer: &Address, proposal_id: u64) {
-    signer.require_auth();
-    let signers: Vec<Address> = env.storage().instance().get(&KEY_SIGNERS).unwrap_or(vec![env]);
-    if !signers.contains(signer) {
-        panic_with_error!(env, GovError::NotASigner);
-    }
+    pub fn approve(env: Env, voter: Address, proposal_id: u64) {
+        voter.require_auth();
 
-    // Anti-Sybil: verify the signer holds the required stake at vote time.
-    let min_stake: i128 = env.storage().instance().get(&KEY_MIN_STAKE).unwrap_or(0);
-    if min_stake > 0 {
-        let stake_token: Address = env.storage().instance().get(&KEY_STAKE_TOK).unwrap();
-        let balance = token::Client::new(env, &stake_token).balance(signer);
-        if balance < min_stake {
-            panic_with_error!(env, GovError::InsufficientStake);
-        }
-    }
+        let mut proposal: Proposal = env
+            .storage()
+            .persistent()
+            .get(&proposal_id)
+            .expect("Proposal not found");
 
     let mut props = load_proposals(env);
     let threshold: u32 = env.storage().instance().get(&KEY_THRESH).unwrap_or(1);
@@ -150,17 +125,8 @@ pub fn approve(env: &Env, signer: &Address, proposal_id: u64) {
     }
 }
 
-/// Execute a proposal after threshold approvals and time-lock expiry.
-/// Transitions state from Approved → Executed.
-pub fn execute(env: &Env, proposal_id: u64) -> Proposal {
-    let mut props = load_proposals(env);
-    let (mut prop, unlock) = props.get(proposal_id).unwrap_or_else(|| {
-        panic_with_error!(env, GovError::ProposalNotFound)
-    });
-    
-    // Only approved proposals can be executed
-    if prop.state != ProposalState::Approved {
-        panic_with_error!(env, GovError::InvalidStateTransition);
+        proposal.state = 2; 
+        env.storage().persistent().set(&proposal_id, &proposal);
     }
     
     if env.ledger().sequence() < unlock {
