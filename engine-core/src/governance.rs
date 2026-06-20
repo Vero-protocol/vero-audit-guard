@@ -10,6 +10,7 @@ impl Governance {
         env: Env,
         proposer: Address,
         action_hash: BytesN<32>,
+        duration_ledgers: u32,
     ) -> u64 {
         proposer.require_auth();
 
@@ -17,12 +18,17 @@ impl Governance {
         let mut next_id: u64 = storage.get(&Symbol::new(&env, "prop_id")).unwrap_or(0);
         next_id += 1;
 
+        // Calculate absolute ledger expiration height
+        let current_ledger = env.ledger().sequence();
+        let voting_deadline = current_ledger + duration_ledgers;
+
         let proposal = Proposal {
             id: next_id,
             proposer,
             action_hash,
             approved_by: Vec::new(&env),
             state: 0, 
+            voting_deadline,
         };
 
         storage.set(&Symbol::new(&env, "prop_id"), &next_id);
@@ -40,6 +46,8 @@ impl Governance {
             .get(&proposal_id)
             .expect("Proposal not found");
 
+        // Rule: Block voting if the current ledger height exceeds the deadline
+        assert!(env.ledger().sequence() <= proposal.voting_deadline, "Voting window has closed");
         assert_eq!(proposal.state, 0, "Proposal is not active");
         
         let mut approved_by = proposal.approved_by;
@@ -58,6 +66,8 @@ impl Governance {
             .get(&proposal_id)
             .expect("Proposal not found");
 
+        // Rule: Block execution if the proposal has expired past its voting window
+        assert!(env.ledger().sequence() <= proposal.voting_deadline, "Proposal has expired");
         assert_eq!(proposal.state, 0, "Proposal already executed or closed");
         assert!(proposal.approved_by.len() >= 2, "Insufficient signature count");
 
