@@ -26,6 +26,7 @@ const KEY_AMOUNT:    Symbol = symbol_short!("ER_AMOUNT");
 #[derive(Copy, Clone)]
 pub enum RecoveryError {
     NotAdmin            = 1,
+    InvalidAddress      = 6,
     AlreadyApproved     = 2,
     ThresholdNotMet     = 3,
     NoPendingRequest    = 4,
@@ -37,6 +38,10 @@ pub enum RecoveryError {
 /// * `admins`    – addresses authorised to approve a recovery.
 /// * `threshold` – number of approvals required (must be ≤ admins.len()).
 pub fn init(env: &Env, admins: Vec<Address>, threshold: u32) {
+    // Validate each admin address
+    for admin in admins.iter() {
+        validate_address(env, admin);
+    }
     if threshold == 0 || threshold > admins.len() {
         panic_with_error!(env, RecoveryError::InvalidThreshold);
     }
@@ -52,6 +57,9 @@ pub fn init(env: &Env, admins: Vec<Address>, threshold: u32) {
 pub fn request(env: &Env, requester: &Address, token: &Address, dest: &Address, amount: i128) {
     requester.require_auth();
     require_admin(env, requester);
+    // Validate token and destination addresses
+    validate_address(env, token);
+    validate_address(env, dest);
 
     // Reset state for the new request
     clear_pending(env);
@@ -140,6 +148,20 @@ fn require_admin(env: &Env, caller: &Address) {
         .unwrap_or(vec![env]);
     if !admins.contains(caller) {
         panic_with_error!(env, RecoveryError::NotAdmin);
+    }
+}
+
+/// Helper to validate that an address is not the zero address.
+fn validate_address(env: &Env, addr: &Address) {
+    // In Soroban, the zero address is represented by all-zero bytes.
+    let zero = Address::from_bytes(&[0u8; 32]);
+    if addr == &zero {
+        panic_with_error!(env, RecoveryError::InvalidAddress);
+    }
+    // Ensure the address string is non-empty (unlikely for valid addresses)
+    let s = addr.to_string();
+    if s.is_empty() {
+        panic_with_error!(env, RecoveryError::InvalidAddress);
     }
 }
 
