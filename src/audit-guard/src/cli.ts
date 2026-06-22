@@ -187,6 +187,55 @@ async function detectLogic(args: string[]): Promise<void> {
   }
 }
 
+/**
+ * Evaluate a scanner report and fail the build on blocking findings.
+ *
+ * Environment variables:
+ *   SCAN_REPORT_FILE           Path to scanner JSON report (default: ./reports/latest-scan.json)
+ *   SECURITY_SEVERITY_THRESHOLD  Block when severity rank > threshold (default: 3)
+ *
+ * Exit codes:
+ *   0  — gate passed
+ *   1  — blocking findings or scan report error
+ */
+async function runSecurityGate(args: string[]): Promise<void> {
+  const reportPath =
+    process.env.SCAN_REPORT_FILE || args[1] || "./reports/latest-scan.json";
+  const threshold = Number(
+    process.env.SECURITY_SEVERITY_THRESHOLD ?? DEFAULT_SEVERITY_THRESHOLD
+  );
+
+  if (!fs.existsSync(reportPath)) {
+    console.error(`❌ Scan report not found: ${reportPath}`);
+    process.exit(1);
+  }
+
+  const json = fs.readFileSync(reportPath, "utf-8");
+  const result = evaluateSecurityGateFromJson(json, threshold);
+
+  console.log("\n🔒 Security Gate\n");
+  console.log(`Threshold : severity rank > ${result.threshold}`);
+  console.log(`Findings  : ${result.totalFindings}`);
+  console.log(`Blocking  : ${result.blockingFindings.length}`);
+  console.log(`\n${result.summary}\n`);
+
+  if (result.blockingFindings.length > 0) {
+    console.log("Blocking findings:");
+    for (const finding of result.blockingFindings) {
+      console.log(
+        `  [${finding.severity}] ${finding.file}:${finding.line} — ${finding.rule}`
+      );
+    }
+  }
+
+  console.log("\n📊 Raw Result:");
+  console.log(JSON.stringify(result, null, 2));
+
+  if (!result.passed) {
+    process.exit(1);
+  }
+}
+
 function printHelp(): void {
   console.log(`
 Policy Engine CLI

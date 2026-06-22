@@ -25,6 +25,21 @@ export {
   LOGIC_PATTERNS,
   LOGIC_PATTERN_IDS,
 } from "./logic-patterns";
+
+export {
+  DEFAULT_SEVERITY_THRESHOLD,
+  SEVERITY_RANK,
+  evaluateSecurityGate,
+  evaluateSecurityGateFromJson,
+  isBlockingSeverity,
+  severityRank,
+} from "./security-gate";
+export type {
+  ScannerFinding,
+  ScannerReport,
+  ScannerSeverity,
+  SecurityGateResult,
+} from "./security-gate";
 export type {
   LogicPattern,
   DetectionContext,
