@@ -7,6 +7,8 @@
  *   - Threat feed matches
  */
 import * as fs from "fs";
+import { performance } from "perf_hooks";
+import { sendAlert } from "../../src/audit-guard/src/webhook";
 import * as path from "path";
 
 import { ThreatFeedFetcher } from "./audit-guard/threat-feed-fetcher";
@@ -21,7 +23,7 @@ export interface RelayerMetrics {
 }
 
 export interface AnomalyAlert {
-  type: "NONCE_SPIKE" | "FAILED_TX_BURST" | "UNAUTHORIZED_ADDRESS" | "THREAT_FEED_MATCH";
+  type: "NONCE_SPIKE" | "FAILED_TX_BURST" | "UNAUTHORIZED_ADDRESS" | "THREAT_FEED_MATCH" | "NONCE_REUSE";
   severity: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
   address: string;
   detail: string;
@@ -160,20 +162,30 @@ async function monitor(): Promise<void> {
     console.error("[anomaly-detector] Initial threat feed update failed:", (err as Error).message);
   }
 
-  setInterval(async () => {
-    try {
-      await threatFetcher.updateFeed();
-    } catch (err) {
-      console.error("[anomaly-detector] Threat feed update error:", (err as Error).message);
-    }
+      setInterval(async () => {
+        try {
+          await threatFetcher.updateFeed();
+        } catch (err) {
+          console.error("[anomaly-detector] Threat feed update error:", (err as Error).message);
+        }
 
-    try {
-      const metrics = await fetchMetrics();
-      await runOnce(metrics);
-    } catch (err) {
-      console.error("[anomaly-detector] Fetch error:", (err as Error).message);
-    }
-  }, POLL_INTERVAL_MS);
+        try {
+          const start = performance.now();
+          const metrics = await fetchMetrics();
+          await runOnce(metrics);
+          const duration = performance.now() - start;
+          const thresholdMs = Number(process.env.RELAYER_LATENCY_THRESHOLD_MS ?? 2000);
+          if (duration > thresholdMs) {
+            void sendAlert({
+              repository: "relayer",
+              alert: `Relayer latency high: ${Math.round(duration)}ms`,
+              timestamp: new Date().toISOString(),
+            });
+          }
+        } catch (err) {
+          console.error("[anomaly-detector] Fetch error:", (err as Error).message);
+        }
+      }, POLL_INTERVAL_MS);
 }
 
 if (require.main === module) {
