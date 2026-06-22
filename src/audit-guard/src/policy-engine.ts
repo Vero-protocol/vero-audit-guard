@@ -4,7 +4,6 @@
  */
 
 import { execSync } from "child_process";
-import { performance } from "perf_hooks";
 import * as fs from "fs";
 import * as path from "path";
 import { SecurityTip, SECURITY_TIPS } from "./security-tips";
@@ -123,7 +122,6 @@ export class PolicyEngine {
    * Evaluate PR data against policies
    */
   async evaluate(prData: PRData): Promise<EvaluationResult> {
-    const start = performance.now();
     let result: EvaluationResult;
 
     if (!this.opaAvailable) {
