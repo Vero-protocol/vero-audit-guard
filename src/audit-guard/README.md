@@ -456,6 +456,112 @@ The pattern library has a coarse `policies/logic_errors.rego` mirror for
 orgs that prefer to centralise policy in OPA. The TypeScript engine
 remains authoritative for the fine-grained heuristics.
 
+## Relayer Tx Scan (Issue #25)
+
+The `RelayerTxScanner` ships alongside `LogicErrorDetector` to authorize
+transactions before the relayer submits them to the Stellar network. It
+checks each envelope against an operator-supplied policy and emits a
+tri-state `AuthorizationStatus`:
+
+| Status            | Meaning                                                      |
+|-------------------|--------------------------------------------------------------|
+| `AUTHORIZED`      | All signers are valid, no suspicious shape — relay as normal. |
+| `REQUIRES_REVIEW` | Ambiguous (HIGH/MEDIUM warning) — human review required.      |
+| `UNAUTHORIZED`    | Hard deny (denylisted signer, replay, malformed, etc.).      |
+
+```typescript
+import {
+  RelayerTxScanner,
+  RelayerScanOptions,
+  RelayerTransaction,
+} from "@vero/audit-guard-policy-engine";
+
+const tx: RelayerTransaction = {
+  hash: "0123…ef",
+  sourceAccount: "GAUTHORIZED…",
+  sequenceNumber: "123456789",
+  fee: 100,
+  signatures: [
+    { signerKey: "GAUTHORIZED…", signatureValue: "base64…" },
+  ],
+  operations: [{ type: "payment", destination: "GB…", amount: "10" }],
+};
+
+const options: RelayerScanOptions = {
+  authorizedSigners: ["GAUTHORIZED…", "GANOTHER…"],
+  denylistedSigners: ["GBANNED…"],
+  multiSigThreshold: 2,
+  trustedSourceAccounts: ["GAUTHORIZED…"],
+};
+
+const scanner = new RelayerTxScanner();
+const result = scanner.scan(tx, options);
+if (result.status === "UNAUTHORIZED") {
+  // Drop the envelope, alert SecOps, open an IRP.
+}
+```
+
+### Patterns
+
+| Pattern ID                     | Default Severity | Trigger                                                           |
+|--------------------------------|------------------|-------------------------------------------------------------------|
+| `DENYLISTED_SIGNER`            | CRITICAL         | Signature from a key on the denylist (denylist trumps allowlist). |
+| `UNKNOWN_SIGNER`               | HIGH             | Signature from a key NOT on the allowlist.                        |
+| `MISSING_SIGNATURES`           | CRITICAL         | Envelope has zero signatures — refuse to relay.                   |
+| `INSUFFICIENT_SIGNATURES`      | HIGH / CRITICAL  | Unique signer count below the configured multi-sig threshold.     |
+| `DUPLICATE_SIGNATURE`          | LOW              | A signer contributes more than one signature (fee waste).         |
+| `MALFORMED_SIGNATURE_ENTRY`    | HIGH             | A signature object is missing `signerKey` or `signatureValue`.   |
+| `INVALID_HASH_FORMAT`          | MEDIUM           | Hash is not 64-char lower-case hex.                               |
+| `REPLAY_DETECTED`              | CRITICAL         | Hash matches an entry in `options.knownHashes`.                   |
+| `UNTRUSTED_SOURCE_ACCOUNT`     | HIGH             | `sourceAccount` not in `options.trustedSourceAccounts` (opt-in).  |
+| `UNSUPPORTED_OPERATION`        | HIGH             | An op type is not in `options.allowedOperationTypes` (opt-in).    |
+| `FEE_OVER_LIMIT`               | MEDIUM           | `fee / opCount` exceeds `options.maxFeePerOp` (opt-in).           |
+
+### CLI
+
+```bash
+TX_DATA_FILE=./tx.json \
+  VERO_RELAYER_AUTHORIZED_SIGNERS="GA..,GB.." \
+  VERO_RELAYER_DENYLISTED_SIGNERS="GBAD.." \
+  RELAYER_MULTI_SIG_THRESHOLD=2 \
+  node dist/cli.js scan-tx
+```
+
+Exit codes (mirror `detect-logic`):
+- `0` — `AUTHORIZED` or `REQUIRES_REVIEW` (advisory findings are surfaced in the report)
+- `1` — `UNAUTHORIZED` (drop the envelope, open an IRP)
+
+### Environment Variables
+
+| Variable                          | Purpose                                                    |
+|-----------------------------------|------------------------------------------------------------|
+| `TX_DATA_FILE`                    | Relayer tx envelope JSON (default: `./tx-data.json`)       |
+| `RELAYER_REPORT_FILE`             | Markdown output path (opt-in)                              |
+| `VERO_RELAYER_AUTHORIZED_SIGNERS` | CSV allowlist (required)                                   |
+| `VERO_RELAYER_DENYLISTED_SIGNERS` | CSV denylist (opt-in)                                      |
+| `VERO_RELAYER_TRUSTED_SOURCES`    | CSV trusted source accounts (opt-in)                       |
+| `VERO_RELAYER_ALLOWED_OPERATIONS` | CSV allowed op types (opt-in)                              |
+| `RELAYER_MULTI_SIG_THRESHOLD`     | Positive integer multi-sig threshold (opt-in)              |
+| `RELAYER_MAX_FEE_PER_OP`          | Per-op fee ceiling in stroops (opt-in)                      |
+| `RELAYER_PATTERN_FILTER`          | Pattern IDs to restrict the run (opt-in, comma-separated)  |
+
+### Pattern subsetting
+
+```typescript
+// Only fire INVALID_HASH_FORMAT and REPLAY_DETECTED (skip the rest).
+const result = scanner.scan(tx, {
+  authorizedSigners: ["G…"],
+  patterns: ["INVALID_HASH_FORMAT", "REPLAY_DETECTED"],
+});
+```
+
+### OPA/Rego Integration
+
+The TypeScript engine has a coarse `policies/relayer_authz.rego` mirror
+under package `relayer.authz` for orgs that centralise relayer
+authorization in OPA. The TS engine remains authoritative for the
+fine-grained heuristics.
+
 ## Performance
 
 - **Evaluation:** < 100ms for typical PRs
