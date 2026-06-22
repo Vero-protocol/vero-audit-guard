@@ -1,12 +1,12 @@
 /**
  * CLI for Policy Engine
- * Used by GitHub Actions to evaluate PR compliance and to run
- * logic-error detection on source files (issue #16).
+ * Used by GitHub Actions to evaluate PR compliance and to scan
+ * relayed transactions for unauthorized signers (issue #25).
  */
 
 import * as fs from "fs";
 import PolicyEngine, { PRData } from "./policy-engine";
-import LogicErrorDetector, { LogicScanOptions } from "./logic-detector";
+import RelayerTxScanner, { TxData } from "./relayer-scanner";
 
 async function main() {
   const args = process.argv.slice(2);
@@ -14,8 +14,8 @@ async function main() {
 
   if (command === "pr" || command === "check-pr") {
     await checkPR();
-  } else if (command === "detect-logic") {
-    await detectLogic(args);
+  } else if (command === "scan-tx") {
+    await scanTx(args);
   } else if (command === "help") {
     printHelp();
   } else {
@@ -97,41 +97,41 @@ async function evaluate(): Promise<void> {
 }
 
 /**
- * Scan a source file for logic-bug patterns (reentrancy, integer
- * overflow risk, hardcoded keys, eval, etc.) — issue #16.
+ * Scan a relayed TX against the allowlist/denylist.
  *
  * Environment variables:
- *   SOURCE_FILE            File to scan (default: positional arg or ./src.ts)
- *   LOGIC_PATTERN_FILTER   Comma-separated pattern IDs to restrict the scan to
- *   REPORT_FILE            If set, writes a markdown report to this path
+ *   TX_DATA_FILE               Path to a TX JSON (default: ./tx-data.json)
+ *   RELAYER_CONFIG             Path to relayer config JSON (overrides default discovery)
+ *   RELAYER_AUTHORIZED_SIGNERS Comma-separated allowlist override
+ *   RELAYER_DENYLIST           Comma-separated denylist override
+ *   RELAYER_MULTISIG_THRESHOLD Minimum number of authorized signers required
+ *   REPORT_FILE                If set, writes a markdown report to this path
  *
  * Exit codes:
- *   0  — status SAFE
- *   1  — status VULNERABLE or scan error
+ *   0  — TX is AUTHORIZED (or REQUIRES_REVIEW without REPORT_FILE)
+ *   1  — TX is UNAUTHORIZED or config/error problem
  */
-async function detectLogic(args: string[]): Promise<void> {
-  const sourceFile =
-    process.env.SOURCE_FILE || args[1] || "./src.ts";
-  if (!fs.existsSync(sourceFile)) {
-    console.error(`❌ Source file not found: ${sourceFile}`);
-    console.log("Usage: detect-logic <file-to-scan>");
+async function scanTx(args: string[]): Promise<void> {
+  const txFile = process.env.TX_DATA_FILE || args[1] || "./tx-data.json";
+  if (!fs.existsSync(txFile)) {
+    console.error(`❌ TX data file not found: ${txFile}`);
+    console.log("Usage: scan-tx <tx-data.json>");
     process.exit(1);
   }
-  const code = fs.readFileSync(sourceFile, "utf-8");
 
-  const opts: LogicScanOptions = { file: sourceFile };
-  if (process.env.LOGIC_PATTERN_FILTER) {
-    opts.patterns = process.env.LOGIC_PATTERN_FILTER
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
+  let tx: TxData;
+  try {
+    tx = JSON.parse(fs.readFileSync(txFile, "utf-8")) as TxData;
+  } catch (err) {
+    console.error(`❌ Failed to parse TX JSON: ${(err as Error).message}`);
+    process.exit(1);
   }
 
-  const detector = new LogicErrorDetector();
-  const result = detector.scan(code, opts);
-  const report = detector.generateReport(result);
+  const scanner = RelayerTxScanner.discover();
+  const result = scanner.scan(tx);
+  const report = scanner.generateReport(result);
 
-  console.log("\n🔍 Logic Error Scan\n");
+  console.log("\n🛰️  Relayer TX Scan\n");
   console.log(report);
   console.log("\n📊 Raw Result:");
   console.log(JSON.stringify(result, null, 2));
@@ -141,7 +141,7 @@ async function detectLogic(args: string[]): Promise<void> {
     console.log(`\n📝 Report written to: ${process.env.REPORT_FILE}`);
   }
 
-  if (result.status === "VULNERABLE") {
+  if (result.status === "UNAUTHORIZED") {
     process.exit(1);
   }
 }
@@ -154,24 +154,26 @@ Usage: policy-engine <command> [options]
 
 Commands:
   pr, check-pr      Check PR compliance using GitHub Actions context
-  detect-logic      Scan a source file for logic-bug patterns (issue #16)
+  scan-tx           Scan a relayed TX for unauthorized signers (issue #25)
   evaluate          Evaluate PR data from a JSON file (default)
   help              Show this help message
 
 Environment Variables:
-  PR_DATA_FILE          Path to PR data JSON file (default: ./pr-data.json)
-  REPORT_FILE           Output path for markdown report
-  OPA_POLICIES_DIR      Path to OPA policies directory
-  SOURCE_FILE           Source file for 'detect-logic' (default: ./src.ts)
-  LOGIC_PATTERN_FILTER  Comma-separated pattern IDs to restrict the scan
+  PR_DATA_FILE               Path to PR data JSON file (default: ./pr-data.json)
+  REPORT_FILE                Output path for markdown report
+  OPA_POLICIES_DIR           Path to OPA policies directory
+  TX_DATA_FILE               Path to TX JSON file (default: ./tx-data.json)
+  RELAYER_CONFIG             Path to relayer config JSON (overrides default discovery)
+  RELAYER_AUTHORIZED_SIGNERS Comma-separated allowlist override
+  RELAYER_DENYLIST           Comma-separated denylist override
+  RELAYER_MULTISIG_THRESHOLD Minimum number of authorized signers required
 
 Examples:
   node dist/cli.js pr
   node dist/cli.js evaluate ./my-pr-data.json
   PR_DATA_FILE=./data.json REPORT_FILE=./report.md node dist/cli.js pr
-  node dist/cli.js detect-logic ./path/to/contract.sol
-  LOGIC_PATTERN_FILTER=REENTRANCY_RISK,UNCHECKED_RETURN_VALUE \
-    REPORT_FILE=./report.md node dist/cli.js detect-logic ./contract.sol
+  node dist/cli.js scan-tx ./tx-data.json
+  RELAYER_CONFIG=./relayer.config.json node dist/cli.js scan-tx ./tx.json
 `);
 }
 

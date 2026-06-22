@@ -377,84 +377,97 @@ Enable debug output:
 DEBUG=* npm run evaluate ./pr-data.json
 ```
 
-## Logic Error Detection (Issue #16)
+## Relayer TX Scanner (Issue #25)
 
-The `LogicErrorDetector` ships as an extensible pattern library for
-finding common logic bugs in source code: reentrancy risk, unbounded
-loops, integer overflow risk, hardcoded private keys, use of `eval`,
-assertion-instead-of-require, and more.
-
-```typescript
-import { LogicErrorDetector } from "@vero/audit-guard-policy-engine";
-
-const detector = new LogicErrorDetector();
-const result = detector.scan(sourceCode, { file: "contract.sol" });
-
-if (result.status === "VULNERABLE") {
-  for (const f of result.findings) {
-    console.log(`[${f.severity}] ${f.ruleId} on line ${f.line}: ${f.message}`);
-  }
-}
-```
-
-### Patterns (issue #16)
-
-| Pattern ID | Severity | Description |
-|------------|----------|-------------|
-| `REENTRANCY_RISK` | HIGH | External (low-level) call followed by a balance/state write |
-| `INTEGER_OVERFLOW_RAW` | MEDIUM | Large numeric literal assigned to a sized integer |
-| `UNBOUNDED_LOOP` | HIGH / MEDIUM | `while(true)` / `for(;;)` / for-loop over a dynamic `.length` |
-| `MISSING_ZERO_ADDRESS_CHECK` | MEDIUM | `.transfer(...)` without an upstream zero-address guard |
-| `HARDCODED_PRIVATE_KEY` | CRITICAL | 32-byte (64-char hex) literal anywhere in the source |
-| `ASSERT_VS_REQUIRE` | MEDIUM | `assert(...)` used for input validation |
-| `TODO_SECURITY` | MEDIUM | TODO/FIXME containing a security keyword |
-| `UNCHECKED_RETURN_VALUE` | HIGH | Low-level call whose return value is discarded |
-| `TX_ORIGIN_AUTHORIZATION` | HIGH | `tx.origin` used in an authorization check |
-| `EVAL_USAGE` | CRITICAL | Call to `eval()` |
-| `HARDCODED_API_KEY_LITERAL` | HIGH | API key / secret literal in source |
-
-Run a single sample to see all that fire on a deliberately-bad Solidity
-fragment:
+The `RelayerTxScanner` prevents **unauthorized relaying** of transactions. Every TX that
+passes through the relayer is checked against an **allowlist of authorized signers**, with
+optional hard **denylist** and **multi-sig threshold** support.
 
 ```typescript
-const detector = new LogicErrorDetector();
-const result = detector.scan(`
-function withdraw(uint amount) public {
-  (bool ok,) = msg.sender.call{value: amount}("");
-  balances[msg.sender] = 0;
-}
-`);
-console.log(detector.generateReport(result));
-```
+import { RelayerTxScanner, TxData } from "@vero/audit-guard-policy-engine";
 
-### Restrict to a subset of patterns
-
-```typescript
-const result = detector.scan(sourceCode, {
-  patterns: ["REENTRANCY_RISK", "UNCHECKED_RETURN_VALUE"],
+const scanner = new RelayerTxScanner({
+  authorizedSigners: ["G...alice", "G...bob"],
+  denylist: ["G...hacker"],
+  multisigThreshold: 2,
+  sourceAccounts: ["G...trusted-source"],
 });
+
+const result = scanner.scan({
+  sourceAccount: "G...trusted-source",
+  sequence: "123",
+  signers: ["G...alice", "G...bob"],
+  operations: [{ type: "payment" }],
+});
+
+if (result.status === "UNAUTHORIZED") {
+  // Alert + reject TX; result.violations has structured findings.
+}
 ```
+
+### Configuration
+
+Configuration can come from a JSON file, env-var overrides, or both. The scanner
+auto-discovers `./relayer.config.json` or `./config/relayer.config.json`:
+
+```json
+{
+  "authorizedSigners": ["G...alice", "G...bob"],
+  "denylist": ["G...banned"],
+  "multisigThreshold": 2,
+  "sourceAccounts": ["G...trusted-relayer"]
+}
+```
+
+Environment overrides (highest precedence after explicit CLI args):
+
+| Variable | Description |
+|----------|-------------|
+| `RELAYER_CONFIG` | Path to relayer config JSON |
+| `RELAYER_AUTHORIZED_SIGNERS` | Comma-separated allowlist |
+| `RELAYER_DENYLIST` | Comma-separated denylist |
+| `RELAYER_MULTISIG_THRESHOLD` | Numeric threshold |
+
+> **Fail-closed default:** if no config file is found and no env-var override is
+> provided, the scanner uses an **empty allowlist**. Every TX will be flagged as
+> `UNAUTHORIZED` until a config is supplied.
 
 ### CLI
 
 ```bash
-# Scan a file and print the markdown report + raw result JSON
-node dist/cli.js detect-logic ./contract.sol
+# Scan a TX from a JSON file (auto-discovers config)
+node dist/cli.js scan-tx ./tx-data.json
 
-# Restrict to two patterns and write a markdown report to ./report.md
-LOGIC_PATTERN_FILTER=REENTRANCY_RISK,UNCHECKED_RETURN_VALUE \
+# With explicit config and report output
+RELAYER_CONFIG=./relayer.config.json \
+  TX_DATA_FILE=./tx.json \
   REPORT_FILE=./report.md \
-  node dist/cli.js detect-logic ./contract.sol
+  node dist/cli.js scan-tx
 ```
 
-Exit code is `1` when `result.status === "VULNERABLE"`, so the command
-can be wired directly into CI gates.
+### Status semantics
+
+| Status | Meaning |
+|--------|---------|
+| `AUTHORIZED` | All signers in the allowlist, no violations, no warnings |
+| `REQUIRES_REVIEW` | No foreign-signer violations, but at least one warning (e.g. untrusted source account, threshold shortfall only) |
+| `UNAUTHORIZED` | At least one HIGH/CRITICAL violation (foreign signer, denylisted signer, threshold shortfall + foreign signer, empty signers) |
+
+### Rules emitted
+
+| Rule | Severity | When fired |
+|------|----------|------------|
+| `EMPTY_SIGNERS` | CRITICAL | TX has no signers |
+| `DENYLISTED_SIGNER` | CRITICAL | Any signer is on the hard-ban list |
+| `UNAUTHORIZED_SIGNER` | HIGH | Signer is not on the allowlist (and not denylisted) |
+| `MULTISIG_THRESHOLD_NOT_MET` | MEDIUM/HIGH | Authorized signer count is below the declared threshold |
+| `UNVERIFIED_SOURCE_ACCOUNT` | MEDIUM | TX source account is not in the trusted-source list |
 
 ### OPA/Rego Integration
 
-The pattern library has a coarse `policies/logic_errors.rego` mirror for
-orgs that prefer to centralise policy in OPA. The TypeScript engine
-remains authoritative for the fine-grained heuristics.
+The policy `policies/relayer_authz.rego` mirrors the TypeScript engine so that
+organizations using an OPA deployment can centralize policy. It emits the same
+rule identifiers and severities.
 
 ## Performance
 
