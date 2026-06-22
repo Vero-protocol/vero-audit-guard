@@ -1,5 +1,9 @@
 import { WEBHOOK_URL, WEBHOOK_TOKEN } from "./config";
-import fetch from "node-fetch";
+// Use the global `fetch` API shipped with Node >=20 (undici-backed). This
+// removes the `node-fetch` peer-dep that broke downstream packages
+// (notably the anomaly-detector, which transitively pulls in this file
+// via its Jest tests but never declared `node-fetch` in its own
+// package.json).
 import * as fs from "fs";
 import * as path from "path";
 
