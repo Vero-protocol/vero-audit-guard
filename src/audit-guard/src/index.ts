@@ -57,6 +57,16 @@ export type {
   EventSeverity,
 } from "./event-log-scanner";
 
+export {
+  OnCallRoster,
+} from "./oncall-roster";
+export type {
+  OnCallContact,
+  OnCallRosterConfig,
+  RotationState,
+  PagePayload,
+} from "./oncall-roster";
+
 // Re-export the evaluated PolicyEngine as the package-default for
 // backwards-compat with existing callers.
 import PolicyEngine from "./policy-engine";

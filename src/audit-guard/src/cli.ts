@@ -8,6 +8,7 @@ import * as fs from "fs";
 import PolicyEngine, { PRData } from "./policy-engine";
 import LogicErrorDetector, { LogicScanOptions } from "./logic-detector";
 import EventLogScanner from "./event-log-scanner";
+import { OnCallRoster } from "./oncall-roster";
 
 async function main() {
   const args = process.argv.slice(2);
@@ -19,10 +20,53 @@ async function main() {
     await detectLogic(args);
   } else if (command === "scan-events") {
     scanEvents(args);
+  } else if (command === "roster") {
+    await rosterCommand(args);
   } else if (command === "help") {
     printHelp();
   } else {
     await evaluate();
+  }
+}
+
+/**
+ * Manage the on‑call roster.
+ *
+ * Subcommands:
+ *   roster status       — Show current on‑call contacts
+ *   roster rotate       — Force rotation to next primary
+ *   roster page <msg>   — Page current on‑call with an alert
+ */
+async function rosterCommand(args: string[]): Promise<void> {
+  const sub = args[1] || "status";
+  const roster = new OnCallRoster();
+
+  if (sub === "status") {
+    const onCall = roster.getCurrentOnCall();
+    console.log("\n📟 On‑Call Roster Status\n");
+    console.log(`  Rotation ID     : ${onCall.rotationId}`);
+    console.log(`  Next rotation   : ${onCall.nextRotation}\n`);
+    console.log(`  🟢 Primary  : ${onCall.primary.name} <${onCall.primary.email}>`);
+    console.log(`  🟡 Secondary: ${onCall.secondary.name} <${onCall.secondary.email}>`);
+    console.log(`  🔴 Manager  : ${onCall.manager.name} <${onCall.manager.email}>`);
+    console.log("\nActive contacts:");
+    for (const c of roster.getActiveContacts()) {
+      console.log(`  - [${c.role}] ${c.name} <${c.email}>`);
+    }
+  } else if (sub === "rotate") {
+    roster.rotate();
+    const onCall = roster.getCurrentOnCall();
+    console.log(`\n🔄 Rotated. New primary: ${onCall.primary.name} <${onCall.primary.email}>\n`);
+  } else if (sub === "page") {
+    const message = args.slice(2).join(" ") || "Test page from audit‑guard CLI";
+    const severity = process.env.PAGE_SEVERITY || "CRITICAL";
+    const repository = process.env.PAGE_REPOSITORY || "unknown";
+    console.log(`\n📟 Paging on‑call with: ${message}\n`);
+    await roster.pageCurrentOnCall(message, severity, repository);
+    console.log("\n✅ On‑call contacts paged.\n");
+  } else {
+    console.log(`Unknown roster subcommand: ${sub}`);
+    console.log("Usage: roster <status|rotate|page>");
   }
 }
 
@@ -247,6 +291,7 @@ Commands:
   detect-logic      Scan a source file for logic-bug patterns (issue #16)
   scan-events       Scan audit event logs for sensitive access events
   evaluate          Evaluate PR data from a JSON file (default)
+  roster            Manage on‑call rotation (status|rotate|page)
   help              Show this help message
 
 Environment Variables:
