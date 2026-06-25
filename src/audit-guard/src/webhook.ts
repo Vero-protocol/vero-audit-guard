@@ -1,5 +1,4 @@
 import { WEBHOOK_URL, WEBHOOK_TOKEN } from "./config";
-import fetch from "node-fetch";
 
 export interface AlertPayload {
   repository: string;
