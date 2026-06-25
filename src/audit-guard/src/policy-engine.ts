@@ -4,6 +4,7 @@
  */
 
 import { execSync } from "child_process";
+import { Keypair } from "@stellar/stellar-sdk";
 import * as fs from "fs";
 import * as path from "path";
 import { SecurityTip, SECURITY_TIPS } from "./security-tips";
@@ -35,6 +36,8 @@ export interface PRData {
   relayer?: string;
   signature?: string;
   timestamp?: number;
+  maintenance_mode?: boolean;
+  maintenance_message?: string;
 }
 
 export interface PolicyViolation {
