@@ -19,6 +19,14 @@ mkdir -p "$REPORTS_DIR" "$ROOT/monitor" "$ROOT/scanner"
 # ── 2. Scanner Engine (Rust) ───────────────────────────────────────────────
 log "Building scanner-engine..."
 cd "$SCANNER_DIR"
+
+if ! command -v cargo-audit >/dev/null 2>&1; then
+  fail "cargo-audit is required for dependency vulnerability scanning. Install it with: cargo install cargo-audit --locked"
+fi
+
+log "Auditing scanner-engine Rust dependencies..."
+cargo audit --deny warnings
+
 cargo build --release 2>&1 | tail -5
 
 TARGET_DIR="${1:-../vero-core-contracts}"
