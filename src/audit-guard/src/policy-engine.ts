@@ -7,7 +7,8 @@ import { execSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
 import { SecurityTip, SECURITY_TIPS } from "./security-tips";
-
+import { getNextReportVersion } from "./report-version";
+import { sendAlert } from "./webhook";
 export interface PRData {
   pull_request: {
     title: string;
@@ -52,6 +53,7 @@ export interface EvaluationResult {
   warnings_count: number;
   high_severity_violations: PolicyViolation[];
   security_tip?: SecurityTip;
+  maintenance_alert?: string;
 }
 
 /**
@@ -136,6 +138,13 @@ export class PolicyEngine {
 
     // Add security tip to result
     result.security_tip = this.getSecurityTip(prData);
+
+    // Surface a maintenance-mode banner if the relayer/PR is in maintenance.
+    if (prData.maintenance_mode) {
+      result.maintenance_alert =
+        prData.maintenance_message ||
+        "Maintenance mode enabled — review automated checks before merge.";
+    }
     return result;
   }
 
@@ -364,7 +373,21 @@ export class PolicyEngine {
           ? "⚠️"
           : "❌";
     report += `## ${emoji} Policy Compliance Check\n\n`;
+    report += `### Report Version: ${getNextReportVersion()}\n\n`;
     report += `**Status:** ${result.status}\n\n`;
+
+    // Maintenance Alert
+    if (result.maintenance_alert) {
+      report += `> [!IMPORTANT]\n`;
+      report += `> ### 🚧 MAINTENANCE NOTICE\n`;
+      report += `> ${result.maintenance_alert}\n\n`;
+      // Send alert via webhook
+      void sendAlert({
+        repository: "unknown",
+        alert: result.maintenance_alert,
+        timestamp: new Date().toISOString(),
+      });
+    }
 
     // Summary
     report += `${result.summary}\n\n`;
