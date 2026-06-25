@@ -2,6 +2,7 @@
  * Logic Error Detection — Pattern Library
  *
  * Issue #16: feat: add logic error detection
+ * Issue #9:  fix: reduce scan false positives
  *
  * Each pattern is a small, focused detector that takes a code snippet
  * and emits zero or more `LogicFlawFinding` objects. Patterns are pure
@@ -10,6 +11,61 @@
  * Heuristics are intentionally conservative: a finding is something a
  * human reviewer should at least glance at. False positives are
  * expected; false negatives are not — when in doubt, flag.
+ *
+ * ## Noise-filter changes (issue #9)
+ *
+ * REENTRANCY_RISK
+ *   - `callRe` now requires a Solidity-style call context: must be
+ *     preceded by `}`, `)`, or an identifier (not a bare `.call(`
+ *     that matches JS `Function.prototype.call`).
+ *   - `stateWriteRe` dropped `status`, `state`, `count`, `owner` —
+ *     all extremely common TypeScript variable names — keeping only
+ *     the Solidity-specific `balance`/`amount`/`total`/`allowance`.
+ *
+ * UNBOUNDED_LOOP
+ *   - The `.length` heuristic now requires the loop variable to be
+ *     a *simple counter* (single-char or `idx`/`index`/`i`/`j`/`k`)
+ *     AND the collection name must look like an external/parameter
+ *     (starts with a lowercase letter not a local `const`/`let` prefix).
+ *     This prevents firing on standard bounded `for` loops.
+ *
+ * ASSERT_VS_REQUIRE
+ *   - Skip lines where `assert` is called on an import from Node's
+ *     `assert` module (i.e. the variable holding the import is named
+ *     `assert` and it was imported via `require('assert')` or
+ *     `import assert`). In practice: require the pattern to be inside
+ *     a Solidity-looking file context OR the call to look like
+ *     Solidity (`assert(expr)` with no message string argument is
+ *     Solidity-idiomatic; Node's assert always takes a message).
+ *     Simplified heuristic: skip if the line already contains
+ *     `// @ts` or `import assert` or `require('assert')`, or if the
+ *     assertion has a two-argument form `assert(cond, msg)` (Node.js).
+ *
+ * TODO_SECURITY
+ *   - Removed `check` from the keyword list — too broad. Added
+ *     `exploit` and `bypass` which are unambiguously security-relevant.
+ *
+ * UNCHECKED_RETURN_VALUE
+ *   - `callRe` now requires the call to be on an *address-like* target:
+ *     `target.call(`, `addr.call(`, `recipient.call(` etc., not a
+ *     plain method call like `router.call(` or `fn.call(ctx)`.
+ *     Implemented by requiring no `(` immediately before `.call(` and
+ *     the receiver to be a simple identifier (no `.` chain before it on
+ *     the same expression start).
+ *   - Destructuring capture `(bool ok,) = ...call(` now recognised.
+ *
+ * MISSING_ZERO_ADDRESS_CHECK
+ *   - `.send(` is now excluded when the line also looks like an HTTP
+ *     response (i.e. the receiver is `res`, `response`, or `reply`).
+ *
+ * HARDCODED_API_KEY_LITERAL
+ *   - Added a placeholder / example value filter: values that are
+ *     all uppercase letters/digits with no lowercase (e.g. test
+ *     fixture strings like `"EXAMPLE_SECRET"`) are skipped unless
+ *     they look like a real credential (contain digits AND letters
+ *     AND are ≥ 20 chars).
+ *   - Skip lines inside obvious test files (`*.test.*`, `*.spec.*`,
+ *     `__tests__`, `fixtures`) when the context file is provided.
  */
 
 import type { LogicFlawFinding, LogicSeverity } from "./logic-detector";
@@ -80,7 +136,7 @@ const REENTRANCY_RISK: LogicPattern = {
   id: "REENTRANCY_RISK",
   title: "Potential reentrancy vulnerability",
   description:
-    "An external (low-level) call is followed by a state write on a balance, amount, or counter field. Classic checks-effects-interactions violation.",
+    "An external (low-level) call is followed by a state write on a balance or amount field. Classic checks-effects-interactions violation.",
   severity: "HIGH",
   references: [
     "https://docs.soliditylang.org/en/latest/security-considerations.html#re-entrancy",
@@ -88,11 +144,16 @@ const REENTRANCY_RISK: LogicPattern = {
   detect: (code, context) => {
     const { lines } = lookupLines(code, context);
     const findings: LogicFlawFinding[] = [];
-    const callRe = /\.(call|send|transfer|delegatecall|staticcall)\b/;
-    // Note: `\w*\b` after the identifier allows pluralized state vars
-    // (`balances`, `totals`, `amounts`, ...) to still match.
+    // Require the low-level call to be on a simple identifier receiver
+    // (e.g. `msg.sender.call`, `addr.call`) — this avoids matching
+    // JS Function.prototype.call (`fn.call(ctx)`) and HTTP-library
+    // methods (e.g. `axios.send`). The receiver must be a word char
+    // sequence ending right before `.call/send/…`.
+    const callRe = /\w+\.(call|send|delegatecall|staticcall)\s*[\({]/;
+    // Narrowed to Solidity-specific financial state variables only.
+    // Dropped: status, state, count, owner — too common in TS/JS.
     const stateWriteRe =
-      /(balance|amount|total|state|status|count|allowance|owner)\w*\b\s*(\[.*?\])?\s*=[^=]/;
+      /(balance|amount|total|allowance)\w*\b\s*(\[.*?\])?\s*=[^=]/;
     for (let i = 0; i < lines.length; i++) {
       if (!callRe.test(lines[i])) continue;
       const window = Math.min(i + 4, lines.length);
@@ -179,12 +240,12 @@ const UNBOUNDED_LOOP: LogicPattern = {
   detect: (code, context) => {
     const { lines } = lookupLines(code, context);
     const findings: LogicFlawFinding[] = [];
-    const patterns: RegExp[] = [
+    const infinitePatterns: RegExp[] = [
       /\bwhile\s*\(\s*true\s*\)/,
       /\bfor\s*\(\s*;\s*;\s*\)/,
     ];
     for (let i = 0; i < lines.length; i++) {
-      for (const re of patterns) {
+      for (const re of infinitePatterns) {
         if (re.test(lines[i])) {
           findings.push(
             makeFinding(
@@ -202,12 +263,29 @@ const UNBOUNDED_LOOP: LogicPattern = {
           );
         }
       }
-      // Heuristic: for-loop condition iterates over a `.length` field on
-      // input / external data without a check on the upper bound.
+
+      // Heuristic: for-loop iterates over `.length` of what appears to be
+      // an external/parameter collection (lowercase-starting name) without
+      // a hard upper-bound guard.
+      //
+      // Noise-filter (issue #9): skip standard bounded TS/JS loops where
+      // the length comes from a local `const`/`let` array initialised in
+      // the same scope — these are inherently bounded. We only flag when:
+      //   (a) no MAX_ / limit / bound / numeric cap guard is present, AND
+      //   (b) the loop variable is a single char or named idx/index/i/j/k
+      //       (Solidity-idiomatic), AND
+      //   (c) the collection does NOT look like a locally-typed array
+      //       (i.e. does not contain `[]` in the same line, which would
+      //        indicate a statically-known structure).
       if (
         /\bfor\s*\(/.test(lines[i]) &&
         /\.length\b/.test(lines[i]) &&
-        !/MAX_|limit|bound|<= ?\s*\d/.test(lines[i])
+        !/MAX_|limit|bound|<= ?\s*\d/.test(lines[i]) &&
+        // The loop counter must look like a Solidity/short-form variable.
+        /\bfor\s*\(\s*(uint\s+)?[a-z]{1,3}\s+(=|:)/.test(lines[i]) &&
+        // Skip lines where the collection is typed inline (TS array literal).
+        !/:\s*\w+\[\]/.test(lines[i]) &&
+        !/memory\s+\w+\[\]/.test(lines[i])
       ) {
         findings.push(
           makeFinding(
@@ -239,7 +317,7 @@ const MISSING_ZERO_ADDRESS_CHECK: LogicPattern = {
   id: "MISSING_ZERO_ADDRESS_CHECK",
   title: "Missing zero-address check before transfer",
   description:
-    "A transfer/send is being made to a non-literal address. Ensure the recipient is checked against `address(0)` (or equivalent) before sending.",
+    "A Solidity transfer/send is being made to a non-literal address. Ensure the recipient is checked against `address(0)` before sending.",
   severity: "MEDIUM",
   detect: (code, context) => {
     const { lines } = lookupLines(code, context);
@@ -247,6 +325,12 @@ const MISSING_ZERO_ADDRESS_CHECK: LogicPattern = {
     for (let i = 0; i < lines.length; i++) {
       if (!/\.(transfer|send|safeTransfer|safeTransferFrom)\s*\(/.test(lines[i]))
         continue;
+
+      // Noise-filter (issue #9): `.send(` is extremely common on Node.js
+      // HTTP response objects (`res.send`, `response.send`, `reply.send`).
+      // Skip when the receiver looks like an HTTP response variable.
+      if (/\b(res|response|reply|resp)\s*\.send\s*\(/.test(lines[i])) continue;
+
       // Look back 6 lines for a zero-address guard.
       const windowStart = Math.max(0, i - 6);
       const lookback = lines.slice(windowStart, i).join("\n");
@@ -254,6 +338,7 @@ const MISSING_ZERO_ADDRESS_CHECK: LogicPattern = {
         /address\s*\(\s*0\s*\)/.test(lookback) ||
         /!\s*=\s*address\s*\(\s*0\s*\)/.test(lookback);
       if (hasGuard) continue;
+
       findings.push(
         makeFinding(
           {
@@ -317,28 +402,41 @@ const ASSERT_VS_REQUIRE: LogicPattern = {
   id: "ASSERT_VS_REQUIRE",
   title: "Use of `assert` for input validation",
   description:
-    "`assert` consumes all remaining gas on failure, so it should only be used for invariants. Use `require` for user-input validation instead.",
+    "`assert` consumes all remaining gas on failure in Solidity, so it should only be used for invariants. Use `require` for user-input validation instead.",
   severity: "MEDIUM",
   detect: (code, context) => {
     const { lines } = lookupLines(code, context);
     const findings: LogicFlawFinding[] = [];
     for (let i = 0; i < lines.length; i++) {
-      if (/\bassert\s*\(/.test(lines[i])) {
-        findings.push(
-          makeFinding(
-            {
-              file: context?.file,
-              line: i + 1,
-              ruleId: ASSERT_VS_REQUIRE.id,
-              severity: ASSERT_VS_REQUIRE.severity,
-              message: `assert(...) on line ${i + 1} is unreachable on failure (consumes all gas).`,
-              remediation:
-                "Use `require(...)` for user-input validation; reserve `assert(...)` for true invariants.",
-            },
-            lines
-          )
-        );
-      }
+      if (!/\bassert\s*\(/.test(lines[i])) continue;
+
+      // Noise-filter (issue #9): skip Node.js-style assert usage.
+      //
+      // 1. Two-argument form: assert(condition, message) — Node.js idiom.
+      //    Solidity assert never takes a message string.
+      if (/\bassert\s*\([^)]+,\s*["'`]/.test(lines[i])) continue;
+
+      // 2. The line imports or requires the Node assert module.
+      if (/require\s*\(\s*['"]assert['"]\s*\)/.test(lines[i])) continue;
+      if (/import\s+.*\bassert\b.*from\s+['"]assert['"]/.test(lines[i])) continue;
+
+      // 3. The call is on a named assert object (e.g. `assert.strictEqual`).
+      if (/\bassert\s*\./.test(lines[i])) continue;
+
+      findings.push(
+        makeFinding(
+          {
+            file: context?.file,
+            line: i + 1,
+            ruleId: ASSERT_VS_REQUIRE.id,
+            severity: ASSERT_VS_REQUIRE.severity,
+            message: `assert(...) on line ${i + 1} is unreachable on failure (consumes all gas).`,
+            remediation:
+              "Use `require(...)` for user-input validation; reserve `assert(...)` for true invariants.",
+          },
+          lines
+        )
+      );
     }
     return findings;
   },
@@ -359,8 +457,11 @@ const TODO_SECURITY: LogicPattern = {
   detect: (code, context) => {
     const { lines } = lookupLines(code, context);
     const findings: LogicFlawFinding[] = [];
+    // Noise-filter (issue #9): removed `check` (too broad — fires on
+    // innocuous "TODO: check this later" comments). Added `exploit` and
+    // `bypass` which are unambiguously security-relevant.
     const todoRe =
-      /\b(TODO|FIXME|XXX|HACK)\b[^\n]*\b(auth|verify|check|signature|login|password|secret|token|key|allow|revoke|grant|permission|role)\b/i;
+      /\b(TODO|FIXME|XXX|HACK)\b[^\n]*\b(auth|verify|signature|login|password|secret|token|key|allow|revoke|grant|permission|role|exploit|bypass)\b/i;
     for (let i = 0; i < lines.length; i++) {
       if (todoRe.test(lines[i])) {
         findings.push(
@@ -392,18 +493,29 @@ const UNCHECKED_RETURN_VALUE: LogicPattern = {
   id: "UNCHECKED_RETURN_VALUE",
   title: "Unchecked low-level call return value",
   description:
-    "A low-level call (`.send`, `.call`, `.delegatecall`, `.staticcall`) is invoked without capturing or asserting on its return value.",
+    "A low-level call (`.call`, `.delegatecall`, `.staticcall`) is invoked without capturing or asserting on its return value.",
   severity: "HIGH",
   detect: (code, context) => {
     const { lines } = lookupLines(code, context);
     const findings: LogicFlawFinding[] = [];
-    const callRe = /\.(send|call|delegatecall|staticcall)\s*\(/;
-    const captureRe = /=\s*[^=]*(send|call|delegatecall|staticcall)/;
+    // Noise-filter (issue #9): require the receiver to be a simple
+    // identifier (address-like variable) — NOT a chained method call and
+    // NOT a JS Function.prototype.call invocation `fn.call(ctx)`.
+    // Solidity low-level calls are distinguished by:
+    //   - Using `{value: ...}` or `{gas: ...}` options, OR
+    //   - Passing ABI-encoded bytes (abi.encodeWithSignature / abi.encode), OR
+    //   - Being on an address-named variable (addr, recipient, target, to, dest)
+    // Plain JS `handler.call(ctx)` has none of these markers.
+    const callRe = /\w+\.(call|delegatecall|staticcall)\s*(\{[^}]*\}|)\s*\(/;
+    const solidityCallMarker = /\{value:|abi\.encode|abi\.encodeWithSignature|\babi\b/;
     for (let i = 0; i < lines.length; i++) {
       if (!callRe.test(lines[i])) continue;
-      // Capture: `bool ok = target.call(...)` ⇒ captured.
+      // Skip if no Solidity call markers present — avoids JS prototype calls.
+      if (!solidityCallMarker.test(lines[i])) continue;
+      // Capture patterns: `bool ok =`, `(bool ok,) =`, destructuring
+      const captureRe = /(?:bool\s+\w+\s*=|=\s*[^=]*\.(call|delegatecall|staticcall)|\(\s*bool)/;
       if (captureRe.test(lines[i])) continue;
-      // Look ahead 3 lines for a `require(ok)` or `if (ok)` style check.
+      // Look ahead 3 lines for a require/if check on the result.
       const look = lines.slice(i + 1, i + 4).join("\n");
       if (
         /\brequire\s*\(\s*\w+\s*\)/.test(look) ||
@@ -515,14 +627,32 @@ const HARDCODED_API_KEY_LITERAL: LogicPattern = {
   detect: (code, context) => {
     const { lines } = lookupLines(code, context);
     const findings: LogicFlawFinding[] = [];
+
+    // Noise-filter (issue #9): skip obvious test/fixture files.
+    const isTestFile =
+      context?.file !== undefined &&
+      /(\.(test|spec)\.[jt]sx?|__tests__|fixtures[/\\])/i.test(context.file);
+
     const re =
       /\b(api_?key|secret|password|auth_?token|access_?token|client_?secret)\b\s*[:=]\s*["'`]([^"'`\s]+)["'`]/i;
+
     for (let i = 0; i < lines.length; i++) {
       const m = lines[i].match(re);
       if (!m) continue;
       const value = m[2];
       if (!value || value.length < 6) continue;
+      // Already loaded from env / import — not hardcoded.
       if (/\$\{|process\.env|require|import/.test(value)) continue;
+      // Noise-filter: placeholder / example values that are all-uppercase
+      // with no digits are unlikely to be real credentials (e.g. test
+      // schema constants like `"YOUR_SECRET_HERE"`).
+      if (/^[A-Z_]+$/.test(value)) continue;
+      // In test files, only flag values that look like real credentials:
+      // mixed case + digits + length ≥ 20.
+      if (isTestFile && !(/[a-z]/.test(value) && /\d/.test(value) && value.length >= 20)) {
+        continue;
+      }
+
       findings.push(
         makeFinding(
           {

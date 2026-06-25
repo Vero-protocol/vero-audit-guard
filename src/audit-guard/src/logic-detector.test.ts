@@ -342,6 +342,116 @@ function withdraw(uint amount) public {
     });
   });
 
+  // -------------------------------------------------------------------------
+  // Issue #9 — false-positive regression suite
+  // Each test documents a concrete noisy-trigger that was eliminated.
+  // -------------------------------------------------------------------------
+  describe("False-positive regressions (issue #9)", () => {
+    it("REENTRANCY_RISK: should NOT fire on standard TS state variable named 'status'", () => {
+      const code = `
+async function processJob(job: Job) {
+    await job.run();
+    job.status = "done";
+    job.count = job.count + 1;
+}
+`;
+      const r = detector.scan(code);
+      expect(r.findings.some((f) => f.ruleId === "REENTRANCY_RISK")).toBe(false);
+    });
+
+    it("REENTRANCY_RISK: should NOT fire on JS Function.prototype.call", () => {
+      const code = `
+function applyMixin(target: object, mixin: object) {
+    const fn = Object.assign.bind(null);
+    fn.call(null, target, mixin);
+    target.count = 0;
+}
+`;
+      const r = detector.scan(code);
+      expect(r.findings.some((f) => f.ruleId === "REENTRANCY_RISK")).toBe(false);
+    });
+
+    it("UNBOUNDED_LOOP: should NOT fire on a standard bounded TS for-loop", () => {
+      const code = `
+function processItems(items: string[]) {
+    for (let i = 0; i < items.length; i++) {
+        console.log(items[i]);
+    }
+}
+`;
+      const r = detector.scan(code);
+      expect(r.findings.some((f) => f.ruleId === "UNBOUNDED_LOOP")).toBe(false);
+    });
+
+    it("ASSERT_VS_REQUIRE: should NOT fire on Node.js two-argument assert", () => {
+      const code = `
+import assert from "assert";
+function validate(x: number) {
+    assert(x > 0, "x must be positive");
+}
+`;
+      const r = detector.scan(code);
+      expect(r.findings.some((f) => f.ruleId === "ASSERT_VS_REQUIRE")).toBe(false);
+    });
+
+    it("ASSERT_VS_REQUIRE: should NOT fire on assert.strictEqual", () => {
+      const code = `
+assert.strictEqual(result, expected, "values differ");
+`;
+      const r = detector.scan(code);
+      expect(r.findings.some((f) => f.ruleId === "ASSERT_VS_REQUIRE")).toBe(false);
+    });
+
+    it("TODO_SECURITY: should NOT fire on 'TODO: check this later'", () => {
+      const code = `
+// TODO: check this later when we have time
+function getUser(id: string) { return db.find(id); }
+`;
+      const r = detector.scan(code);
+      expect(r.findings.some((f) => f.ruleId === "TODO_SECURITY")).toBe(false);
+    });
+
+    it("UNCHECKED_RETURN_VALUE: should NOT fire on a plain JS method call", () => {
+      const code = `
+function run(handler: Handler, ctx: Context) {
+    handler.call(ctx, payload);
+}
+`;
+      const r = detector.scan(code);
+      expect(r.findings.some((f) => f.ruleId === "UNCHECKED_RETURN_VALUE")).toBe(false);
+    });
+
+    it("MISSING_ZERO_ADDRESS_CHECK: should NOT fire on Express res.send()", () => {
+      const code = `
+app.get("/ping", (req, res) => {
+    res.send("pong");
+});
+`;
+      const r = detector.scan(code);
+      expect(r.findings.some((f) => f.ruleId === "MISSING_ZERO_ADDRESS_CHECK")).toBe(false);
+    });
+
+    it("HARDCODED_API_KEY_LITERAL: should NOT fire on all-uppercase placeholder", () => {
+      const code = `
+const secret = "YOUR_SECRET_HERE";
+`;
+      const r = detector.scan(code);
+      expect(r.findings.some((f) => f.ruleId === "HARDCODED_API_KEY_LITERAL")).toBe(false);
+    });
+
+    it("HARDCODED_API_KEY_LITERAL: should NOT fire on test fixture with short simple value", () => {
+      const code = `const api_key = "test123";`;
+      const r = detector.scan(code, { file: "src/auth.test.ts" });
+      expect(r.findings.some((f) => f.ruleId === "HARDCODED_API_KEY_LITERAL")).toBe(false);
+    });
+
+    it("HARDCODED_API_KEY_LITERAL: SHOULD still fire on a realistic credential outside test files", () => {
+      const code = `const api_key = "sk-proj-abc123XYZdef456uvw789";`;
+      const r = detector.scan(code, { file: "src/client.ts" });
+      expect(r.findings.some((f) => f.ruleId === "HARDCODED_API_KEY_LITERAL")).toBe(true);
+    });
+  });
+
   describe("Severity sort & line numbers", () => {
     it("should sort findings by severity (CRITICAL first) then by line", () => {
       const code = `

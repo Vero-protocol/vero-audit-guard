@@ -47,9 +47,14 @@ const DEFAULT_SENSITIVE_KEYWORDS = Object.freeze([
   "access denied",
   "permission denied",
   "privilege",
-  "admin",
+  // Noise-filter (issue #9): bare "admin" and "token" match too broadly
+  // (e.g. "admin panel loaded", "token refreshed" in routine audit logs).
+  // Replaced with more specific multi-word signals.
+  "admin_override",
+  "admin privilege",
+  "token leak",
+  "token stolen",
   "secret",
-  "token",
   "password",
   "private_key",
   "credential",

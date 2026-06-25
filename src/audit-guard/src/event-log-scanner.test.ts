@@ -41,14 +41,17 @@ describe("EventLogScanner", () => {
         eventType: "unauthorized_access",
         actor: "mallory",
         repository: "vero/audit-guard",
-        message: "access denied for admin settings",
+        message: "access denied for admin privilege settings",
       })
     );
 
     expect(result.sensitiveCount).toBe(1);
     expect(result.sensitiveEvents[0].severity).toBe("HIGH");
+    // "admin" is no longer a bare keyword (too noisy). The tightened signals
+    // that fire here are the event type "unauthorized_access", the keyword
+    // "access denied", and "admin privilege" from the message.
     expect(result.sensitiveEvents[0].matchedSignals).toEqual(
-      expect.arrayContaining(["unauthorized_access", "access denied", "admin"])
+      expect.arrayContaining(["unauthorized_access", "access denied", "admin privilege"])
     );
   });
 
@@ -64,11 +67,14 @@ describe("EventLogScanner", () => {
   });
 
   it("keeps malformed text lines as searchable events", () => {
-    const result = scanner.scanText("plain relay line mentioning token exposure");
+    // "token" was a bare keyword that fired on routine lines like
+    // "token refreshed" — removed in issue #9 noise-filter.
+    // Use "token leak" which is unambiguously sensitive.
+    const result = scanner.scanText("plain relay line mentioning token leak");
 
     expect(result.totalEvents).toBe(1);
     expect(result.events[0].eventType).toBe("unknown");
-    expect(result.events[0].message).toContain("token exposure");
+    expect(result.events[0].message).toContain("token leak");
     expect(result.sensitiveCount).toBe(1);
   });
 
