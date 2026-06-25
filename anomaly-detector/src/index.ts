@@ -5,6 +5,7 @@
  *   - Failed transaction bursts
  *   - Unauthorized address interactions
  *   - Threat feed matches
+ *   - RPC node health
  */
 import * as fs from "fs";
 import { performance } from "perf_hooks";
@@ -12,6 +13,79 @@ import { sendAlert } from "../../src/audit-guard/src/webhook";
 import * as path from "path";
 
 import { ThreatFeedFetcher } from "./audit-guard/threat-feed-fetcher";
+
+interface NodeStatus {
+  url: string;
+  healthy: boolean;
+  lastChecked: number;
+  responseTime?: number;
+}
+
+class NodeHealthChecker {
+  private nodes: NodeStatus[];
+  private currentNodeIndex: number;
+  private failoverCallbacks: Array<(oldUrl: string, newUrl: string) => void>;
+
+  constructor(nodeUrls: string[]) {
+    this.nodes = nodeUrls.map((url) => ({
+      url,
+      healthy: true,
+      lastChecked: Date.now(),
+    }));
+    this.currentNodeIndex = 0;
+    this.failoverCallbacks = [];
+  }
+
+  addFailoverCallback(callback: (oldUrl: string, newUrl: string) => void): void {
+    this.failoverCallbacks.push(callback);
+  }
+
+  getCurrentNode(): string {
+    return this.nodes[this.currentNodeIndex].url;
+  }
+
+  async checkHealth(): Promise<NodeStatus[]> {
+    const axios = await import("axios");
+    const results: NodeStatus[] = [];
+
+    for (let i = 0; i < this.nodes.length; i++) {
+      const node = this.nodes[i];
+      const startTime = performance.now();
+
+      try {
+        await axios.default.post(
+          node.url,
+          { jsonrpc: "2.0", method: "eth_blockNumber", params: [], id: 1 },
+          { timeout: 3000 }
+        );
+
+        node.healthy = true;
+        node.responseTime = performance.now() - startTime;
+      } catch {
+        node.healthy = false;
+        node.responseTime = undefined;
+      }
+
+      node.lastChecked = Date.now();
+      results.push({ ...node });
+    }
+
+    if (!this.nodes[this.currentNodeIndex].healthy) {
+      const newIndex = this.nodes.findIndex(
+        (n, idx) => idx !== this.currentNodeIndex && n.healthy
+      );
+
+      if (newIndex !== -1) {
+        const oldUrl = this.nodes[this.currentNodeIndex].url;
+        const newUrl = this.nodes[newIndex].url;
+        this.currentNodeIndex = newIndex;
+        this.failoverCallbacks.forEach((cb) => cb(oldUrl, newUrl));
+      }
+    }
+
+    return results;
+  }
+}
 
 export const threatFetcher = new ThreatFeedFetcher();
 
@@ -37,6 +111,12 @@ const AUTHORIZED_ADDRESSES = new Set<string>(
 const NONCE_SPIKE_THRESHOLD = Number(process.env.NONCE_SPIKE_THRESHOLD ?? 50);
 const FAILED_TX_THRESHOLD = Number(process.env.FAILED_TX_THRESHOLD ?? 10);
 const POLL_INTERVAL_MS = Number(process.env.POLL_INTERVAL_MS ?? 5000);
+
+const RPC_NODE_URLS = (process.env.RPC_NODE_URLS ?? "").split(",").filter(Boolean);
+
+const nodeHealthChecker = RPC_NODE_URLS.length > 0 
+  ? new NodeHealthChecker(RPC_NODE_URLS)
+  : null;
 
 const DB_PATH = path.join(__dirname, "nonce-db.json");
 const previousNonces = new Map<string, number>(loadNonces());
@@ -162,11 +242,34 @@ async function monitor(): Promise<void> {
     console.error("[anomaly-detector] Initial threat feed update failed:", (err as Error).message);
   }
 
+  if (nodeHealthChecker) {
+    nodeHealthChecker.addFailoverCallback((oldUrl, newUrl) => {
+      console.error(`[node-health] Failover triggered: ${oldUrl} → ${newUrl}`);
+      void sendAlert({
+        repository: "relayer",
+        alert: `Node failover: ${oldUrl} → ${newUrl}`,
+        timestamp: new Date().toISOString(),
+      });
+    });
+
+    const initialStatus = await nodeHealthChecker.checkHealth();
+    console.log("[node-health] Initial node status:", initialStatus);
+  }
+
       setInterval(async () => {
         try {
           await threatFetcher.updateFeed();
         } catch (err) {
           console.error("[anomaly-detector] Threat feed update error:", (err as Error).message);
+        }
+
+        try {
+          if (nodeHealthChecker) {
+            const statuses = await nodeHealthChecker.checkHealth();
+            console.log("[node-health] Node statuses:", statuses);
+          }
+        } catch (err) {
+          console.error("[node-health] Check error:", (err as Error).message);
         }
 
         try {

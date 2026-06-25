@@ -104,6 +104,7 @@ See [`INCIDENT_RESPONSE.md`](INCIDENT_RESPONSE.md) for the full runbook.
 - Rust toolchain (`rustup install stable`)
 - Node.js ≥ 20
 - `cargo`, `npm`
+- `cargo-audit` (`cargo install cargo-audit --locked`)
 
 ### Run the Full Guard Locally
 
@@ -113,11 +114,12 @@ chmod +x BUILD_GUARD.sh
 ```
 
 This will:
-1. Build and run the Rust static analyzer.
-2. Run anomaly-detector tests.
-3. Build the audit trail module.
-4. Compute and optionally anchor report hashes on Stellar.
-5. Report the security health status.
+1. Audit Rust dependencies with `cargo audit` so known vulnerable crates fail the guard.
+2. Build and run the Rust static analyzer.
+3. Run anomaly-detector tests.
+4. Build the audit trail module.
+5. Compute and optionally anchor report hashes on Stellar.
+6. Report the security health status.
 
 ### Environment Variables
 
