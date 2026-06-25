@@ -9,6 +9,7 @@ import PolicyEngine, { PRData } from "./policy-engine";
 import LogicErrorDetector, { LogicScanOptions } from "./logic-detector";
 import EventLogScanner from "./event-log-scanner";
 import { OnCallRoster } from "./oncall-roster";
+import RbacMapper, { RbacPolicy, RbacScanOptions } from "./rbac-mapper";
 
 async function main() {
   const args = process.argv.slice(2);
@@ -22,6 +23,8 @@ async function main() {
     scanEvents(args);
   } else if (command === "roster") {
     await rosterCommand(args);
+  } else if (command === "rbac-check") {
+    await rbacCheck(args);
   } else if (command === "help") {
     printHelp();
   } else {
@@ -280,6 +283,61 @@ async function runSecurityGate(args: string[]): Promise<void> {
   }
 }
 
+/**
+ * Audit an RBAC policy document for privilege escalation and
+ * least-privilege violations — issue #13.
+ *
+ * Environment variables:
+ *   RBAC_POLICY_FILE   Path to RBAC policy JSON (default: positional arg or ./rbac-policy.json)
+ *   REPORT_FILE        If set, writes a markdown report to this path
+ *   RBAC_FLAG_ADMIN    Set to 'false' to suppress admin-user findings (default: true)
+ *
+ * Exit codes:
+ *   0  — status SAFE
+ *   1  — status VIOLATIONS_FOUND or scan error
+ */
+async function rbacCheck(args: string[]): Promise<void> {
+  const policyFile =
+    process.env.RBAC_POLICY_FILE || args[1] || "./rbac-policy.json";
+
+  if (!fs.existsSync(policyFile)) {
+    console.error(`❌ RBAC policy file not found: ${policyFile}`);
+    console.log("Usage: rbac-check <rbac-policy.json>");
+    console.log('Expected shape: { "roles": [...], "users": [...] }');
+    process.exit(1);
+  }
+
+  let policy: RbacPolicy;
+  try {
+    policy = JSON.parse(fs.readFileSync(policyFile, "utf-8")) as RbacPolicy;
+  } catch (err) {
+    console.error(`❌ Failed to parse RBAC policy file: ${(err as Error).message}`);
+    process.exit(1);
+  }
+
+  const opts: RbacScanOptions = {
+    flagAdminUsers: process.env.RBAC_FLAG_ADMIN !== "false",
+  };
+
+  const mapper = new RbacMapper(opts);
+  const result = mapper.scan(policy, opts);
+  const report = mapper.generateReport(result);
+
+  console.log("\n🔐 RBAC Access Control Audit\n");
+  console.log(report);
+  console.log("\n📊 Raw Result:");
+  console.log(JSON.stringify(result, null, 2));
+
+  if (process.env.REPORT_FILE) {
+    fs.writeFileSync(process.env.REPORT_FILE, report);
+    console.log(`\n📝 Report written to: ${process.env.REPORT_FILE}`);
+  }
+
+  if (result.status === "VIOLATIONS_FOUND") {
+    process.exit(1);
+  }
+}
+
 function printHelp(): void {
   console.log(`
 Policy Engine CLI
@@ -290,6 +348,7 @@ Commands:
   pr, check-pr      Check PR compliance using GitHub Actions context
   detect-logic      Scan a source file for logic-bug patterns (issue #16)
   scan-events       Scan audit event logs for sensitive access events
+  rbac-check        Audit RBAC policy for privilege escalation (issue #13)
   evaluate          Evaluate PR data from a JSON file (default)
   roster            Manage on‑call rotation (status|rotate|page)
   help              Show this help message
@@ -301,15 +360,19 @@ Environment Variables:
   SOURCE_FILE           Source file for 'detect-logic' (default: ./src.ts)
   LOGIC_PATTERN_FILTER  Comma-separated pattern IDs to restrict the scan
   EVENT_LOG_FILE        Event log file for 'scan-events'
+  RBAC_POLICY_FILE      RBAC policy JSON file for 'rbac-check'
+  RBAC_FLAG_ADMIN       Set to 'false' to suppress admin user findings
 
 Examples:
   node dist/cli.js pr
   node dist/cli.js evaluate ./my-pr-data.json
   PR_DATA_FILE=./data.json REPORT_FILE=./report.md node dist/cli.js pr
   node dist/cli.js detect-logic ./path/to/contract.sol
-  LOGIC_PATTERN_FILTER=REENTRANCY_RISK,UNCHECKED_RETURN_VALUE \
+  LOGIC_PATTERN_FILTER=REENTRANCY_RISK,UNCHECKED_RETURN_VALUE \\
     REPORT_FILE=./report.md node dist/cli.js detect-logic ./contract.sol
   node dist/cli.js scan-events ./logs/relay-events.log
+  node dist/cli.js rbac-check ./rbac-policy.json
+  RBAC_POLICY_FILE=./policy.json REPORT_FILE=./rbac-report.md node dist/cli.js rbac-check
 `);
 }
 
