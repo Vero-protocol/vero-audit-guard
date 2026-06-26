@@ -12,8 +12,8 @@ import { OnCallRoster } from "./oncall-roster";
 import EventLogScanner from "./event-log-scanner";
 import { LogicErrorDetector, LogicScanOptions } from "./logic-detector";
 import {
-  DEFAULT_SEVERITY_THRESHOLD,
   evaluateSecurityGateFromJson,
+  DEFAULT_SEVERITY_THRESHOLD,
 } from "./security-gate";
 
 async function main() {

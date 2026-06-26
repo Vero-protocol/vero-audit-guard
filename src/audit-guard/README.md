@@ -13,6 +13,7 @@ A powerful **Policy as Code** engine for enforcing security and compliance rules
 - **Detects risky patterns** — Flags large changes, breaking changes, and security-sensitive code modifications
 - **Integrates with CI/CD** — Runs automatically on every PR with inline GitHub comments
 - **Blocks non-compliant PRs** — Prevents merge of PRs that violate critical policies
+- **Formal Verification Documentation** — Generates and exports proofs for concurrency and memory safety. See [FORMAL_VERIFICATION.md](./FORMAL_VERIFICATION.md).
 
 ## Architecture
 

@@ -3,6 +3,7 @@
 
 package pr.compliance
 
+import future.keywords.in
 import data.lib.severity
 
 # Rule: PR Title must not be empty and must be meaningful
@@ -17,7 +18,7 @@ deny[msg] {
 }
 
 deny[msg] {
-    len(input.pull_request.title) < 10
+    count(input.pull_request.title) < 10
     msg := {
         "rule": "PR_TITLE_TOO_SHORT",
         "severity": severity.MEDIUM,
@@ -65,8 +66,8 @@ deny[msg] {
 # Rule: Security-sensitive changes must have security label or detailed justification
 deny[msg] {
     sensitive_keywords := ["auth", "crypto", "signature", "key", "secret", "token", "vulnerability", "exploit"]
-    any_sensitive := any(keyword | keyword := sensitive_keywords[_]; contains(lower(input.pull_request.body), keyword))
-    any_sensitive
+    any_sensitive := [keyword | keyword := sensitive_keywords[_]; contains(lower(input.pull_request.body), keyword)]
+    count(any_sensitive) > 0
     labels := {label | label := input.pull_request.labels[_]}
     not "security" in labels
     not "audit" in labels
@@ -91,7 +92,7 @@ deny[msg] {
 }
 
 # Rule: Changelog must be updated for non-trivial PRs
-deny[msg] {
+warning[msg] {
     labels := {label | label := input.pull_request.labels[_]}
     not "trivial" in labels
     not "docs" in labels
@@ -131,14 +132,45 @@ deny[msg] {
     }
 }
 
+# Rule: Relayer signature must be present and from an authorized address
+deny[msg] {
+    not input.relayer
+    msg := {
+        "rule": "RELAYER_SIGNATURE_MISSING",
+        "severity": severity.CRITICAL,
+        "message": "❌ Relayer signature missing",
+        "detail": "PR data must be signed by an authorized relayer"
+    }
+}
+
+deny[msg] {
+    not input.signature
+    msg := {
+        "rule": "RELAYER_SIGNATURE_MISSING",
+        "severity": severity.CRITICAL,
+        "message": "❌ Relayer signature missing",
+        "detail": "PR data must be signed by an authorized relayer"
+    }
+}
+
+deny[msg] {
+    not input.timestamp
+    msg := {
+        "rule": "RELAYER_SIGNATURE_MISSING",
+        "severity": severity.CRITICAL,
+        "message": "❌ Relayer signature missing",
+        "detail": "PR data must be signed by an authorized relayer"
+    }
+}
+
 # Warnings (advisory, not blocking)
 warning[msg] {
-    len(input.pull_request.title) > 100
+    count(input.pull_request.title) > 100
     msg := {
         "rule": "PR_TITLE_TOO_LONG",
         "severity": severity.LOW,
         "message": "ℹ️  PR title is long",
-        "detail": sprintf("Consider shortening title from %d characters", [len(input.pull_request.title)])
+        "detail": sprintf("Consider shortening title from %d characters", [count(input.pull_request.title)])
     }
 }
 

@@ -53,7 +53,7 @@ warning[msg] {
     }
 }
 
-contains_regex(str, _re) {
+contains_regex(str, _) {
     # OPA has no native regex in stable-by-default; this stub documents
     # the intent. The TypeScript engine does the heavy lifting.
     str != ""
