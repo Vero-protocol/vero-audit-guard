@@ -27,7 +27,7 @@
   "author": "Vero Security Team",
   "license": "MIT",
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.500.0",
+    "@stellar/stellar-sdk": "12.3.0",
     "axios": "^1.7.0",
     "dotenv": "^16.4.0",
     "pdfkit": "^0.19.1",
