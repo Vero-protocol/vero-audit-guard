@@ -7,6 +7,13 @@
 import * as fs from "fs";
 import PolicyEngine, { PRData } from "./policy-engine";
 import { LogAnalyzer, LogEntry } from "./log-analyzer";
+import { OnCallRoster } from "./oncall-roster";
+import EventLogScanner from "./event-log-scanner";
+import { LogicErrorDetector, LogicScanOptions } from "./logic-detector";
+import {
+  DEFAULT_SEVERITY_THRESHOLD,
+  evaluateSecurityGateFromJson,
+} from "./security-gate";
 
 async function main() {
   const args = process.argv.slice(2);
@@ -16,6 +23,14 @@ async function main() {
     await checkPR();
   } else if (command === "logs" || command === "analyze-logs") {
     await analyzeLogs();
+  } else if (command === "roster") {
+    await rosterCommand(args);
+  } else if (command === "scan-events") {
+    scanEvents(args);
+  } else if (command === "detect-logic") {
+    await detectLogic(args);
+  } else if (command === "security-gate") {
+    await runSecurityGate(args);
   } else if (command === "help") {
     printHelp();
   } else {
@@ -94,7 +109,7 @@ function scanEvents(args: string[]): void {
     console.log(`\nReport written to: ${process.env.REPORT_FILE}`);
   }
 
-  const blockingEvent = result.sensitiveEvents.some((event) =>
+  const blockingEvent = result.sensitiveEvents.some((event: any) =>
     event.severity === "HIGH" || event.severity === "CRITICAL"
   );
   if (blockingEvent) {
