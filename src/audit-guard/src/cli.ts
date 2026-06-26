@@ -9,6 +9,7 @@ import PolicyEngine, { PRData } from "./policy-engine";
 import LogicErrorDetector, { LogicScanOptions } from "./logic-detector";
 import EventLogScanner from "./event-log-scanner";
 import { OnCallRoster } from "./oncall-roster";
+import InputSanitizationMonitor from "./input-sanitization-monitor";
 
 async function main() {
   const args = process.argv.slice(2);
@@ -22,6 +23,8 @@ async function main() {
     scanEvents(args);
   } else if (command === "roster") {
     await rosterCommand(args);
+  } else if (command === "fuzz-inputs") {
+    await fuzzInputs(args);
   } else if (command === "help") {
     printHelp();
   } else {
@@ -280,6 +283,65 @@ async function runSecurityGate(args: string[]): Promise<void> {
   }
 }
 
+/**
+ * Fuzz a validator function loaded from a JS/TS module against the built-in
+ * probe library — issue #14.
+ *
+ * Environment variables:
+ *   VALIDATOR_MODULE   Path to a JS module that exports a default validator fn
+ *   FUZZ_CATEGORIES    Comma-separated probe categories to run (default: all)
+ *   REPORT_FILE        If set, writes a markdown report to this path
+ *
+ * Exit codes:
+ *   0  — SAFE
+ *   1  — UNSAFE_INPUTS_FOUND or error
+ */
+async function fuzzInputs(args: string[]): Promise<void> {
+  const modulePath = process.env.VALIDATOR_MODULE || args[1];
+
+  if (!modulePath || !fs.existsSync(modulePath)) {
+    console.error("❌ Validator module not found.");
+    console.log("Usage: fuzz-inputs <validator-module.js>");
+    console.log("The module must export a default function: (input: string) => unknown");
+    process.exit(1);
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const mod = require(require("path").resolve(modulePath)) as { default?: unknown };
+  const validator = typeof mod === "function" ? mod : mod?.default;
+
+  if (typeof validator !== "function") {
+    console.error("❌ Module does not export a callable validator function.");
+    process.exit(1);
+  }
+
+  const categories = process.env.FUZZ_CATEGORIES
+    ? (process.env.FUZZ_CATEGORIES.split(",").map((s) => s.trim()) as any)
+    : undefined;
+
+  const monitor = new InputSanitizationMonitor({
+    validatorName: modulePath,
+    categories,
+  });
+
+  const result = monitor.scan(validator as (input: string) => unknown);
+  const report = monitor.generateReport(result);
+
+  console.log("\n🔬 Input Sanitization Monitor\n");
+  console.log(report);
+  console.log("\n📊 Raw Result:");
+  console.log(JSON.stringify(result, null, 2));
+
+  if (process.env.REPORT_FILE) {
+    fs.writeFileSync(process.env.REPORT_FILE, report);
+    console.log(`\n📝 Report written to: ${process.env.REPORT_FILE}`);
+  }
+
+  if (result.status === "UNSAFE_INPUTS_FOUND") {
+    process.exit(1);
+  }
+}
+
 function printHelp(): void {
   console.log(`
 Policy Engine CLI
@@ -290,8 +352,9 @@ Commands:
   pr, check-pr      Check PR compliance using GitHub Actions context
   detect-logic      Scan a source file for logic-bug patterns (issue #16)
   scan-events       Scan audit event logs for sensitive access events
+  fuzz-inputs       Fuzz a validator module against injection/boundary probes
   evaluate          Evaluate PR data from a JSON file (default)
-  roster            Manage on‑call rotation (status|rotate|page)
+  roster            Manage on-call rotation (status|rotate|page)
   help              Show this help message
 
 Environment Variables:
@@ -301,15 +364,16 @@ Environment Variables:
   SOURCE_FILE           Source file for 'detect-logic' (default: ./src.ts)
   LOGIC_PATTERN_FILTER  Comma-separated pattern IDs to restrict the scan
   EVENT_LOG_FILE        Event log file for 'scan-events'
+  VALIDATOR_MODULE      JS module exporting a validator fn for 'fuzz-inputs'
+  FUZZ_CATEGORIES       Comma-separated probe categories for 'fuzz-inputs'
 
 Examples:
   node dist/cli.js pr
   node dist/cli.js evaluate ./my-pr-data.json
-  PR_DATA_FILE=./data.json REPORT_FILE=./report.md node dist/cli.js pr
   node dist/cli.js detect-logic ./path/to/contract.sol
-  LOGIC_PATTERN_FILTER=REENTRANCY_RISK,UNCHECKED_RETURN_VALUE \
-    REPORT_FILE=./report.md node dist/cli.js detect-logic ./contract.sol
   node dist/cli.js scan-events ./logs/relay-events.log
+  node dist/cli.js fuzz-inputs ./src/validators/username.js
+  FUZZ_CATEGORIES=sql_injection,xss node dist/cli.js fuzz-inputs ./validator.js
 `);
 }
 

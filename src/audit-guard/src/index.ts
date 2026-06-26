@@ -72,3 +72,15 @@ export type {
 import PolicyEngine from "./policy-engine";
 export { BountyForm } from "./ui/BountyForm";
 export default PolicyEngine;
+
+// Issue #14: Input sanitization monitor
+export { default as InputSanitizationMonitor, scanAndReport } from "./input-sanitization-monitor";
+export type {
+  InputProbe,
+  InputFinding,
+  InputScanResult,
+  InputMonitorOptions,
+  InputSeverity,
+  ProbeCategory,
+  ValidatorFn,
+} from "./input-sanitization-monitor";
