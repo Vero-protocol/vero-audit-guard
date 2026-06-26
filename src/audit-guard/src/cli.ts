@@ -11,12 +11,9 @@ import LogicErrorDetector, { LogicScanOptions } from "./logic-detector";
 import EventLogScanner from "./event-log-scanner";
 import { OnCallRoster } from "./oncall-roster";
 import {
-  DEFAULT_SEVERITY_THRESHOLD,
   evaluateSecurityGateFromJson,
+  DEFAULT_SEVERITY_THRESHOLD,
 } from "./security-gate";
-
-// Load environment variables
-dotenv.config();
 
 async function main() {
   const args = process.argv.slice(2);

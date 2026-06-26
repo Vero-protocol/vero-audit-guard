@@ -3,6 +3,7 @@
 
 package pr.dependencies
 
+import future.keywords.in
 import data.lib.severity
 
 # Rule: Disallow known unsafe packages
@@ -15,8 +16,8 @@ unsafe_packages := [
 deny[msg] {
     added_dep := input.dependencies_added[_]
     pkg_name := added_dep.name
-    any_unsafe := any(unsafe | unsafe := unsafe_packages[_]; unsafe == pkg_name)
-    any_unsafe
+    any_unsafe := [unsafe | unsafe := unsafe_packages[_]; unsafe == pkg_name]
+    count(any_unsafe) > 0
     msg := {
         "rule": "UNSAFE_PACKAGE_ADDED",
         "severity": severity.CRITICAL,
@@ -46,12 +47,12 @@ deny[msg] {
     added_dep := input.dependencies_added[_]
     version := added_dep.version
     # Check if using wildcard or loose version specifiers
-    starts_with(version, "^") 
+    startswith(version, "^")
     msg := {
         "rule": "DEPENDENCY_VERSION_NOT_PINNED",
         "severity": severity.MEDIUM,
         "message": sprintf("⚠️  Dependency '%s' version not pinned", [added_dep.name]),
-        "detail": sprintf("Use exact version (e.g., '%s') instead of '%s' for reproducible builds", [added_dep.version[1:], added_dep.version])
+        "detail": sprintf("Use exact version (e.g., '%s') instead of '%s' for reproducible builds", [substring(added_dep.version, 1, -1), added_dep.version])
     }
 }
 

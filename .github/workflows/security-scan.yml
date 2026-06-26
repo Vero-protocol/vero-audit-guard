@@ -47,6 +47,7 @@ jobs:
 
       - name: Run static analysis
         run: |
+          mkdir -p ../reports
           if [ -d "vero-core-contracts" ]; then
             ./target/release/scanner ../vero-core-contracts | tee ../reports/latest-scan.json
           else

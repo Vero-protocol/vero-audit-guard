@@ -11,8 +11,8 @@ severity := {
 }
 
 # Helper to check if string contains substring (case-insensitive)
-contains(str, substr) {
-    lower(str)[_:_] == lower(substr)
+contains_ci(str, substr) {
+    contains(lower(str), lower(substr))
 }
 
 # Helper to get max severity from list of violations
