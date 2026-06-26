@@ -1,59 +1,126 @@
-use soroban_sdk::{contracterror, panic_with_error, symbol_short, BytesN, Bytes, Env, IntoVal, Map, String, Symbol, Vec};
+//! Treasury state snapshots and outflow time-locking.
+
+use alloc::format;
+
+use crate::event_struct::{ACT_REQUEST, ACT_SNAPSHOT, ACT_TRIGGERED, MOD_TREASURY};
 use crate::event_utils::publish_event;
-use crate::types::TreasurySnapshot;
+use crate::types::{TreasurySnapshot, TriggerKind};
+use soroban_sdk::{
+    contracterror, contracttype, panic_with_error, symbol_short, Bytes, BytesN, Env, Map, Symbol,
+    Val, Vec,
+};
 
 const KEY_SNAP_COUNTER: Symbol = symbol_short!("SNAPC");
-const KEY_SNAP_LATEST:  Symbol = symbol_short!("SNAPL");
+const KEY_SNAP_LATEST: Symbol = symbol_short!("SNAPL");
+const KEY_OUTFLOWS: Symbol = symbol_short!("OUTFLOWS");
+
 const MAX_BALANCE: i128 = 1_000_000_000_000_000_000;
 const MAX_ACCOUNT_COUNT: u32 = 10_000_000;
-
-#[contracterror]
-#[derive(Copy, Clone)]
-pub enum TreasuryError {
-    SnapshotNotFound = 1,
-    InvalidBalance   = 2,
-    InvalidAccountCount = 3,
-}
-//! Treasury state snapshots for audit history.
-//!
-//! ## Storage layout (optimised)
-//!
-//! | Key       | Storage     | Type             | Notes                          |
-//! |-----------|-------------|------------------|--------------------------------|
-//! | `SNAPC`   | instance    | `u64`            | monotonic snapshot counter     |
-//! | `SNAPL`   | instance    | `u64`            | id of most recent snapshot     |
-//! | `S{id}`   | temporary   | `TreasurySnapshot` | individual snapshot record   |
-//!
-//! Individual snapshot records are stored in **temporary** storage so they accrue
-//! no ledger-entry rent.  The counter and latest-id remain in instance storage
-//! because they are accessed on every write path.
-
-use soroban_sdk::{contracterror, panic_with_error, BytesN, Bytes, Env, Map, Symbol, Val, Vec};
-use crate::event_struct::{MOD_TREASURY, ACT_SNAPSHOT};
-use crate::event_utils::publish_event;
-
-use crate::types::{TreasurySnapshot, TriggerKind, TreasuryError};
-
-const KEY_SNAP_COUNTER: Symbol = soroban_sdk::symbol_short!("SNAPC");
-const KEY_SNAP_LATEST:  Symbol = soroban_sdk::symbol_short!("SNAPL");
+const OUTFLOW_TIMELOCK_SECONDS: u64 = 24 * 60 * 60;
 
 /// Temporary storage TTL constants (ledgers).
-/// ~7 days at 5-second ledger time — sufficient for off-chain indexer pickup.
+/// About 7 days at 5-second ledger time, enough for off-chain indexer pickup.
 const SNAP_TTL_THRESHOLD: u32 = 17_280;
 const SNAP_TTL_EXTEND_TO: u32 = 17_280 * 7;
 
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum TreasuryError {
+    SnapshotNotFound = 1,
+    InvalidBalance = 2,
+    InvalidAccountCount = 3,
+    InvalidOutflowAmount = 4,
+    OutflowNotFound = 5,
+    OutflowAlreadyExecuted = 6,
+    TimelockActive = 7,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TimelockedOutflow {
+    pub id: u64,
+    pub amount: i128,
+    pub requested_at: u64,
+    pub executable_at: u64,
+    pub executed: bool,
+}
+
 pub fn init(env: &Env) {
     env.storage().instance().set(&KEY_SNAP_COUNTER, &0u64);
-    env.storage().instance().set(&KEY_SNAP_LATEST,  &0u64);
+    env.storage().instance().set(&KEY_SNAP_LATEST, &0u64);
+    env.storage()
+        .instance()
+        .set(&KEY_OUTFLOWS, &Map::<u64, TimelockedOutflow>::new(env));
+}
+
+/// Queue a treasury outflow behind the mandatory 24-hour delay.
+pub fn schedule_outflow(env: &Env, outflow_id: u64, amount: i128) -> u64 {
+    if amount <= 0 {
+        panic_with_error!(env, TreasuryError::InvalidOutflowAmount);
+    }
+
+    let now = env.ledger().timestamp();
+    let unlock_at = now + OUTFLOW_TIMELOCK_SECONDS;
+    let mut outflows = load_outflows(env);
+    let outflow = TimelockedOutflow {
+        id: outflow_id,
+        amount,
+        requested_at: now,
+        executable_at: unlock_at,
+        executed: false,
+    };
+
+    outflows.set(outflow_id, outflow);
+    env.storage().instance().set(&KEY_OUTFLOWS, &outflows);
+
+    publish_event(
+        env,
+        MOD_TREASURY | ACT_REQUEST,
+        outflow_id,
+        BytesN::from_array(env, &[0u8; 32]),
+    );
+
+    unlock_at
+}
+
+/// Mark an outflow executable only after its 24-hour time-lock has expired.
+///
+/// Callers should perform the token transfer only after this function returns.
+pub fn execute_outflow(env: &Env, outflow_id: u64) -> TimelockedOutflow {
+    let mut outflows = load_outflows(env);
+    let mut outflow = outflows
+        .get(outflow_id)
+        .unwrap_or_else(|| panic_with_error!(env, TreasuryError::OutflowNotFound));
+
+    if outflow.executed {
+        panic_with_error!(env, TreasuryError::OutflowAlreadyExecuted);
+    }
+
+    if env.ledger().timestamp() < outflow.executable_at {
+        panic_with_error!(env, TreasuryError::TimelockActive);
+    }
+
+    outflow.executed = true;
+    outflows.set(outflow_id, outflow.clone());
+    env.storage().instance().set(&KEY_OUTFLOWS, &outflows);
+
+    publish_event(
+        env,
+        MOD_TREASURY | ACT_TRIGGERED,
+        outflow_id,
+        BytesN::from_array(env, &[0u8; 32]),
+    );
+
+    outflow
+}
+
+pub fn get_outflow(env: &Env, outflow_id: u64) -> Option<TimelockedOutflow> {
+    load_outflows(env).get(outflow_id)
 }
 
 /// Record a treasury snapshot. Called after state-changing operations.
 ///
 /// Returns the snapshot ID for reference.
-///
-/// `trigger` replaces the previous freeform `triggered_by: String` to eliminate
-/// heap-allocated Soroban Strings.  Pass an empty `Map::new(env)` for `context`
-/// when no extra metadata is needed.
 pub fn record_snapshot(
     env: &Env,
     total_balance: i128,
@@ -64,30 +131,25 @@ pub fn record_snapshot(
     if total_balance < 0 {
         panic_with_error!(env, TreasuryError::InvalidBalance);
     }
+
     let total_balance = total_balance.min(MAX_BALANCE);
     let account_count = account_count.min(MAX_ACCOUNT_COUNT);
-
     let counter: u64 = env.storage().instance().get(&KEY_SNAP_COUNTER).unwrap_or(0);
     let snapshot_id = counter + 1;
-
     let state_hash = compute_hash(env, total_balance, account_count, env.ledger().sequence());
 
-    let ts_str = String::from_str(env, &alloc::format!("{}", env.ledger().timestamp()));
-
     let snapshot = TreasurySnapshot {
-        id:             snapshot_id,
+        id: snapshot_id,
         total_balance,
         account_count,
-        ledger:         env.ledger().sequence(),
+        ledger: env.ledger().sequence(),
         timestamp_unix: env.ledger().timestamp(),
-        state_hash:     state_hash.clone(),
+        state_hash: state_hash.clone(),
         trigger,
         context,
     };
 
     let snapshot_key = make_snap_key(env, snapshot_id);
-
-    // Store in temporary storage — no rent accrual.
     env.storage().temporary().set(&snapshot_key, &snapshot);
     env.storage()
         .temporary()
@@ -96,19 +158,6 @@ pub fn record_snapshot(
     env.storage().instance().set(&KEY_SNAP_COUNTER, &snapshot_id);
     env.storage().instance().set(&KEY_SNAP_LATEST, &snapshot_id);
 
-    env.events().publish(
-        (symbol_short!("TRE"), symbol_short!("snapshot")),
-        snapshot_id,
-    );
-    let mut payload = Map::new(env);
-    payload.set(symbol_short!("id"), snapshot_id.into_val(env));
-    payload.set(symbol_short!("balance"), total_balance.into_val(env));
-    payload.set(symbol_short!("accounts"), account_count.into_val(env));
-    payload.set(symbol_short!("ledger"), env.ledger().sequence().into_val(env));
-    publish_event(env, BytesN::from_array(env, &[0u8; 32]), BytesN::from_array(env, &[0u8; 32]), payload);
-    env.storage().instance().set(&KEY_SNAP_LATEST,  &snapshot_id);
-
-    // Single compact event — snapshot id in value, state_hash in hash field.
     publish_event(env, MOD_TREASURY | ACT_SNAPSHOT, snapshot_id, state_hash);
 
     snapshot_id
@@ -121,7 +170,9 @@ pub fn get_snapshot(env: &Env, snapshot_id: u64) -> Option<TreasurySnapshot> {
 
 pub fn get_latest_snapshot(env: &Env) -> Option<TreasurySnapshot> {
     let latest_id: u64 = env.storage().instance().get(&KEY_SNAP_LATEST).unwrap_or(0);
-    if latest_id == 0 { return None; }
+    if latest_id == 0 {
+        return None;
+    }
     get_snapshot(env, latest_id)
 }
 
@@ -133,16 +184,30 @@ pub fn get_recent_snapshots(env: &Env, count: u32) -> Vec<u64> {
     let count = count.min(MAX_ACCOUNT_COUNT);
     let total = snapshot_count(env);
     let mut result = Vec::new(env);
-    if total == 0 { return result; }
-    let start = if total as u32 > count { (total as u32) - count + 1 } else { 1 };
+    if total == 0 {
+        return result;
+    }
+
+    let start = if total as u32 > count {
+        (total as u32) - count + 1
+    } else {
+        1
+    };
+
     for id in (start as u64..=total).rev() {
         result.push_back(id);
     }
+
     result
 }
 
 pub fn verify_snapshot(env: &Env, snapshot: &TreasurySnapshot) -> bool {
-    let recomputed = compute_hash(env, snapshot.total_balance, snapshot.account_count, snapshot.ledger);
+    let recomputed = compute_hash(
+        env,
+        snapshot.total_balance,
+        snapshot.account_count,
+        snapshot.ledger,
+    );
     snapshot.state_hash == recomputed
 }
 
@@ -158,6 +223,13 @@ pub fn audit_trail(env: &Env, from_id: u64) -> Vec<TreasurySnapshot> {
     result
 }
 
+fn load_outflows(env: &Env) -> Map<u64, TimelockedOutflow> {
+    env.storage()
+        .instance()
+        .get(&KEY_OUTFLOWS)
+        .unwrap_or(Map::new(env))
+}
+
 fn compute_hash(env: &Env, balance: i128, account_count: u32, ledger: u32) -> BytesN<32> {
     let mut raw = [0u8; 24];
     raw[..16].copy_from_slice(&balance.to_be_bytes());
@@ -167,14 +239,12 @@ fn compute_hash(env: &Env, balance: i128, account_count: u32, ledger: u32) -> By
 }
 
 fn make_snap_key(env: &Env, id: u64) -> Symbol {
-    Symbol::new(env, &alloc::format!("S{}", id))
     Symbol::new(env, &format!("S{}", id))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::{Env, Map, String, Symbol};
     use soroban_sdk::{Env, Map, Symbol};
 
     #[soroban_sdk::contract]
@@ -183,44 +253,66 @@ mod tests {
     #[soroban_sdk::contractimpl]
     impl TestContract {}
 
-    #[test]
-    fn snapshot_creation_and_retrieval() {
+    fn with_treasury_env(run: impl FnOnce(&Env)) {
         let env = Env::default();
         let contract_id = env.register_contract(None, TestContract);
         env.as_contract(&contract_id, || {
             init(&env);
-            let ctx: Map<Symbol, Val> = Map::new(&env);
-            let id = record_snapshot(&env, 1000, 5, TriggerKind::Deposit, ctx);
+            run(&env);
+        });
+    }
+
+    #[test]
+    fn snapshot_creation_and_retrieval() {
+        with_treasury_env(|env| {
+            let ctx: Map<Symbol, Val> = Map::new(env);
+            let id = record_snapshot(env, 1000, 5, TriggerKind::Deposit, ctx);
             assert_eq!(id, 1);
-            let snap = get_snapshot(&env, 1).unwrap();
+            let snap = get_snapshot(env, 1).unwrap();
             assert_eq!(snap.total_balance, 1000);
             assert_eq!(snap.account_count, 5);
-            assert_eq!(snapshot_count(&env), 1);
+            assert_eq!(snapshot_count(env), 1);
         });
     }
 
     #[test]
     fn snapshot_hash_verification() {
-        let env = Env::default();
-        let contract_id = env.register_contract(None, TestContract);
-        env.as_contract(&contract_id, || {
-            init(&env);
-            let ctx: Map<Symbol, Val> = Map::new(&env);
-            record_snapshot(&env, 500, 2, TriggerKind::Withdrawal, ctx);
-            let snap = get_snapshot(&env, 1).unwrap();
-            assert!(verify_snapshot(&env, &snap));
+        with_treasury_env(|env| {
+            let ctx: Map<Symbol, Val> = Map::new(env);
+            record_snapshot(env, 500, 2, TriggerKind::Withdrawal, ctx);
+            let snap = get_snapshot(env, 1).unwrap();
+            assert!(verify_snapshot(env, &snap));
         });
     }
 
     #[test]
     #[should_panic]
     fn negative_balance_rejected() {
-        let env = Env::default();
-        let contract_id = env.register_contract(None, TestContract);
-        env.as_contract(&contract_id, || {
-            init(&env);
-            let ctx: Map<Symbol, Val> = Map::new(&env);
-            record_snapshot(&env, -1, 0, TriggerKind::Other, ctx);
+        with_treasury_env(|env| {
+            let ctx: Map<Symbol, Val> = Map::new(env);
+            record_snapshot(env, -1, 0, TriggerKind::Other, ctx);
+        });
+    }
+
+    #[test]
+    #[should_panic]
+    fn withdrawal_blocked_before_time_lock_expires() {
+        with_treasury_env(|env| {
+            schedule_outflow(env, 7, 1_000);
+            execute_outflow(env, 7);
+        });
+    }
+
+    #[test]
+    fn withdrawal_executes_after_time_lock_expires() {
+        with_treasury_env(|env| {
+            let unlock_at = schedule_outflow(env, 7, 1_000);
+            env.ledger().set_timestamp(unlock_at);
+
+            let outflow = execute_outflow(env, 7);
+
+            assert!(outflow.executed);
+            assert_eq!(outflow.executable_at, unlock_at);
         });
     }
 }
