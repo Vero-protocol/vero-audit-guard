@@ -380,7 +380,6 @@ Environment Variables:
 Examples:
   node dist/cli.js pr
   node dist/cli.js evaluate ./my-pr-data.json
-  PR_DATA_FILE=./data.json REPORT_FILE=./report.md node dist/cli.js pr
   node dist/cli.js detect-logic ./path/to/contract.sol
   LOGIC_PATTERN_FILTER=REENTRANCY_RISK,UNCHECKED_RETURN_VALUE \\
     REPORT_FILE=./report.md node dist/cli.js detect-logic ./contract.sol

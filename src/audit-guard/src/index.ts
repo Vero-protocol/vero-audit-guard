@@ -72,17 +72,14 @@ export type {
 import PolicyEngine from "./policy-engine";
 export default PolicyEngine;
 
-// Issue #13: RBAC access control audit
-export { default as RbacMapper } from "./rbac-mapper";
+// Issue #14: Input sanitization monitor
+export { default as InputSanitizationMonitor, scanAndReport } from "./input-sanitization-monitor";
 export type {
-  RbacPolicy,
-  RbacRole,
-  RbacUser,
-  RbacSeverity,
-  RbacScanResult,
-  RbacScanOptions,
-  RoleHierarchyNode,
-  PrivilegeEscalationFinding,
-  LeastPrivilegeViolation,
-  Permission,
-} from "./rbac-mapper";
+  InputProbe,
+  InputFinding,
+  InputScanResult,
+  InputMonitorOptions,
+  InputSeverity,
+  ProbeCategory,
+  ValidatorFn,
+} from "./input-sanitization-monitor";
