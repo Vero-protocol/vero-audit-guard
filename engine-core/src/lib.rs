@@ -5,11 +5,9 @@ pub mod circuit_breaker;
 pub mod governance;
 pub mod guards;
 pub mod types;
-pub mod version;
-pub mod event_struct;
-pub mod event_utils;
+pub mod guards;
 
 #[cfg(test)]
 mod governance_tests;
 #[cfg(test)]
-mod treasury_tests;
+mod reentrancy_tests;

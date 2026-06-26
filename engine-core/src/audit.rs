@@ -36,41 +36,51 @@ pub fn compute_commitment(prev_hash: &[u8; 32], sequence: u64, payload: &[u8]) -
 /// - `commitment.sequence` ≤ last recorded sequence (replay guard)
 /// - `commitment.state_hash` doesn't match the expected derivation
 pub fn validate_transition(env: &Env, commitment: &StateCommitment, payload: &[u8]) {
-    crate::non_reentrant!(env, {
-        let last_seq: u64 = env.storage().instance().get(&KEY_SEQ).unwrap_or(0);
-        if commitment.sequence <= last_seq {
-            panic_with_error!(env, AuditError::ReplayedSequence);
-        }
+    crate::non_reentrant!(env);
+    let last_seq: u64 = env.storage().instance().get(&KEY_SEQ).unwrap_or(0);
+    if commitment.sequence <= last_seq {
+        panic_with_error!(env, AuditError::ReplayedSequence);
+    }
 
-        let prev_hash: [u8; 32] = env
-            .storage()
-            .instance()
-            .get::<Symbol, [u8; 32]>(&KEY_PREV)
-            .unwrap_or([0u8; 32]);
+    let prev_hash: [u8; 32] = env
+        .storage()
+        .instance()
+        .get::<Symbol, [u8; 32]>(&KEY_PREV)
+        .unwrap_or([0u8; 32]);
 
-        let expected = compute_commitment(&prev_hash, commitment.sequence, payload);
-        let actual: [u8; 32] = commitment.state_hash.to_array();
-        if expected != actual {
-            panic_with_error!(env, AuditError::HashMismatch);
-        }
+    let expected = compute_commitment(&prev_hash, commitment.sequence, payload);
+    let actual: [u8; 32] = commitment.state_hash.to_array();
+    if expected != actual {
+        panic_with_error!(env, AuditError::HashMismatch);
+    }
 
-        env.storage().instance().set(&KEY_SEQ, &commitment.sequence);
-        env.storage().instance().set(&KEY_PREV, &actual);
+    env.storage().instance().set(&KEY_SEQ, &commitment.sequence);
+    env.storage().instance().set(&KEY_PREV, &actual);
 
-        env.events().publish(
-            (symbol_short!("AUDIT"), symbol_short!("commit")),
-            (commitment.sequence, commitment.state_hash.clone()),
-        );
-    });
+    // Single compact event — replaces the previous double-emit pattern.
+    publish_event(
+        env,
+        MOD_AUDIT | ACT_COMMIT,
+        commitment.sequence,
+        commitment.state_hash.clone(),
+    );
+    // Emit structured Event for audit logs
+    let mut payload = Map::new(env);
+    payload.set(symbol_short!("seq"), commitment.sequence.into_val(env));
+    payload.set(symbol_short!("hash"), commitment.state_hash.clone().into_val(env));
+    publish_event(env, BytesN::from_array(env, &[0u8; 32]), BytesN::from_array(env, &[0u8; 32]), payload);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::{contract, testutils::Address as _, Address, BytesN, Env};
+    use soroban_sdk::{testutils::Address as _, contract, contractimpl, Address, BytesN, Env};
 
     #[contract]
-    struct TestContract;
+    pub struct TestContract;
+
+    #[contractimpl]
+    impl TestContract {}
 
     #[soroban_sdk::contract]
     pub struct TestContract;
@@ -81,17 +91,17 @@ mod tests {
     #[test]
     fn valid_first_commitment() {
         let env = Env::default();
-        let payload = b"state_payload_v1";
-        let hash = compute_commitment(&[0u8; 32], 1, payload);
-
-        let c = StateCommitment {
-            state_hash: BytesN::from_array(&env, &hash),
-            sequence: 1,
-            ledger: 100,
-            author: Address::generate(&env),
-        };
         let contract_id = env.register_contract(None, TestContract);
         env.as_contract(&contract_id, || {
+            let payload = b"state_payload_v1";
+            let hash = compute_commitment(&[0u8; 32], 1, payload);
+
+            let c = StateCommitment {
+                state_hash: BytesN::from_array(&env, &hash),
+                sequence:   1,
+                ledger:     100,
+                author:     Address::generate(&env),
+            };
             validate_transition(&env, &c, payload); // must not panic
         });
     }
@@ -100,18 +110,18 @@ mod tests {
     #[should_panic]
     fn replay_is_rejected() {
         let env = Env::default();
-        let payload = b"payload";
-        let hash = compute_commitment(&[0u8; 32], 1, payload);
-        let c = StateCommitment {
-            state_hash: BytesN::from_array(&env, &hash),
-            sequence: 1,
-            ledger: 100,
-            author: Address::generate(&env),
-        };
         let contract_id = env.register_contract(None, TestContract);
         env.as_contract(&contract_id, || {
+            let payload = b"payload";
+            let hash = compute_commitment(&[0u8; 32], 1, payload);
+            let c = StateCommitment {
+                state_hash: BytesN::from_array(&env, &hash),
+                sequence:   1,
+                ledger:     100,
+                author:     Address::generate(&env),
+            };
             validate_transition(&env, &c, payload);
-            validate_transition(&env, &c, payload); // second call must panic
+            validate_transition(&env, &c, payload);
         });
     }
 }

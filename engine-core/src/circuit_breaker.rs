@@ -42,27 +42,37 @@ pub fn assert_closed(env: &Env) {
 }
 
 pub fn trip(env: &Env, guardian: &Address) {
-    crate::non_reentrant!(env, {
-        guardian.require_auth();
-        require_guardian(env, guardian);
-        set_state(env, BreakerState::Open);
-        env.events().publish(
-            (symbol_short!("CB"), symbol_short!("tripped")),
-            guardian.clone(),
-        );
-    });
+    crate::non_reentrant!(env);
+    guardian.require_auth();
+    require_guardian(env, guardian);
+    set_state(env, BreakerState::Open);
+    // Single compact event — replaces previous double-emit.
+    publish_event(
+        env,
+        MOD_CB | ACT_TRIP,
+        0,
+        BytesN::from_array(env, &[0u8; 32]),
+    );
+    let mut payload = Map::new(env);
+    payload.set(symbol_short!("guardian"), guardian.clone().into_val(env));
+    publish_event(env, BytesN::from_array(env, & [0u8; 32]), BytesN::from_array(env, & [0u8; 32]), payload);
 }
 
 pub fn reset(env: &Env, guardian: &Address) {
-    crate::non_reentrant!(env, {
-        guardian.require_auth();
-        require_guardian(env, guardian);
-        set_state(env, BreakerState::Closed);
-        env.events().publish(
-            (symbol_short!("CB"), symbol_short!("reset")),
-            guardian.clone(),
-        );
-    });
+    crate::non_reentrant!(env);
+    guardian.require_auth();
+    require_guardian(env, guardian);
+    set_state(env, BreakerState::Closed);
+    // Single compact event — replaces previous double-emit.
+    publish_event(
+        env,
+        MOD_CB | ACT_RESET,
+        0,
+        BytesN::from_array(env, &[0u8; 32]),
+    );
+    let mut payload = Map::new(env);
+    payload.set(symbol_short!("guardian"), guardian.clone().into_val(env));
+    publish_event(env, BytesN::from_array(env, & [0u8; 32]), BytesN::from_array(env, & [0u8; 32]), payload);
 }
 
 fn set_state(env: &Env, state: BreakerState) {
@@ -91,10 +101,13 @@ fn require_guardian(env: &Env, caller: &Address) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::{contract, testutils::Address as _, vec, Env};
+    use soroban_sdk::{testutils::Address as _, contract, contractimpl, vec, Env};
 
     #[contract]
-    struct TestContract;
+    pub struct TestContract;
+
+    #[contractimpl]
+    impl TestContract {}
 
     #[soroban_sdk::contract]
     pub struct TestContract;
@@ -105,13 +118,15 @@ mod tests {
     #[test]
     fn trip_and_reset() {
         let env = Env::default();
-        env.mock_all_auths();
-        let g = Address::generate(&env);
         let contract_id = env.register_contract(None, TestContract);
+        let g = Address::generate(&env);
+
         env.as_contract(&contract_id, || {
             init(&env, vec![&env, g.clone()]);
             assert_closed(&env); // should not panic
         });
+
+        env.mock_all_auths();
         env.as_contract(&contract_id, || {
             trip(&env, &g);
             let state: BreakerState = env.storage().instance().get(&KEY_STATE).unwrap();
@@ -128,10 +143,10 @@ mod tests {
     fn non_guardian_cannot_trip() {
         let env = Env::default();
         env.mock_all_auths();
-        let g = Address::generate(&env);
-        let rogue = Address::generate(&env);
         let contract_id = env.register_contract(None, TestContract);
         env.as_contract(&contract_id, || {
+            let g = Address::generate(&env);
+            let rogue = Address::generate(&env);
             init(&env, vec![&env, g.clone()]);
             trip(&env, &rogue);
         });
