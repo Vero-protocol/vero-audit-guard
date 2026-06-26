@@ -5,10 +5,18 @@
  */
 
 import * as fs from "fs";
+import * as dotenv from "dotenv";
 import PolicyEngine, { PRData } from "./policy-engine";
 import LogicErrorDetector, { LogicScanOptions } from "./logic-detector";
 import EventLogScanner from "./event-log-scanner";
 import { OnCallRoster } from "./oncall-roster";
+import {
+  DEFAULT_SEVERITY_THRESHOLD,
+  evaluateSecurityGateFromJson,
+} from "./security-gate";
+
+// Load environment variables
+dotenv.config();
 
 async function main() {
   const args = process.argv.slice(2);
@@ -22,6 +30,8 @@ async function main() {
     scanEvents(args);
   } else if (command === "roster") {
     await rosterCommand(args);
+  } else if (command === "security-gate") {
+    await runSecurityGate(args);
   } else if (command === "help") {
     printHelp();
   } else {
@@ -132,6 +142,9 @@ async function checkPR(): Promise<void> {
   const engine = new PolicyEngine();
   const result = await engine.evaluate(prData);
 
+  // Report to dashboard if configured
+  await engine.reportToDashboard(result, prData);
+
   // Output result
   console.log(JSON.stringify(result, null, 2));
 
@@ -172,6 +185,9 @@ async function evaluate(): Promise<void> {
 
   const engine = new PolicyEngine();
   const result = await engine.evaluate(prData);
+
+  // Report to dashboard if configured
+  await engine.reportToDashboard(result, prData);
 
   console.log("\n📋 Policy Compliance Evaluation\n");
   console.log(engine.generateReport(result));
@@ -292,6 +308,7 @@ Commands:
   scan-events       Scan audit event logs for sensitive access events
   evaluate          Evaluate PR data from a JSON file (default)
   roster            Manage on‑call rotation (status|rotate|page)
+  security-gate     Evaluate scanner report and fail on blocking findings
   help              Show this help message
 
 Environment Variables:

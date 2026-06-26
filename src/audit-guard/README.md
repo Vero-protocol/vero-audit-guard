@@ -118,6 +118,19 @@ PR_DATA_FILE=./pr-data.json npm run check-pr
 REPORT_FILE=./report.md npm run check-pr
 ```
 
+### Dashboard Integration
+
+The policy engine can push compliance alerts to the **Guardian Dashboard**.
+
+**Environment Variables:**
+
+| Variable | Description |
+|----------|-------------|
+| `GUARDIAN_DASH_URL` | API endpoint for Guardian Dashboard |
+| `GUARDIAN_DASH_TOKEN` | Bearer token for authentication |
+| `MAINTENANCE_MODE` | Set to `true` to display a maintenance banner in reports |
+| `MAINTENANCE_MESSAGE` | Custom message for maintenance banner |
+
 ### GitHub Actions
 
 The policy compliance check runs automatically on:

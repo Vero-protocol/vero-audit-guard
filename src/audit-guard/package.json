@@ -14,9 +14,16 @@
     "check-pr": "ts-node src/cli.ts pr",
     "scan-events": "ts-node src/cli.ts scan-events",
     "backup": "ts-node src/backup.ts backup",
-    "restore": "ts-node src/backup.ts restore"
+    "restore": "ts-node src/backup.ts restore",
+    "security-gate": "ts-node src/security-gate-cli.ts"
   },
-  "keywords": ["opa","policy-as-code","security","pr-compliance","vero"],
+  "keywords": [
+    "opa",
+    "policy-as-code",
+    "security",
+    "pr-compliance",
+    "vero"
+  ],
   "author": "Vero Security Team",
   "license": "MIT",
   "dependencies": {
@@ -37,5 +44,7 @@
     "ts-jest": "^29.1.0",
     "ts-node": "^10.9.0"
   },
-  "engines": { "node": ">=20.0.0" }
+  "engines": {
+    "node": ">=20.0.0"
+  }
 }
