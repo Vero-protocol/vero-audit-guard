@@ -1,6 +1,6 @@
-import { WEBHOOK_URL, WEBHOOK_TOKEN } from "./config";
 import * as fs from "fs";
 import * as path from "path";
+import { WEBHOOK_URL, WEBHOOK_TOKEN } from "./config";
 
 export interface AlertPayload {
   repository: string;
