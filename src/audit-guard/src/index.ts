@@ -1,6 +1,7 @@
 /**
  * Vero Audit Guard - Policy as Code Engine
- * Main export for the OPA policy engine
+ * Main export for the OPA-based policy engine plus the
+ * Logic Error Detector (issue #16).
  */
 
 export { default as PolicyEngine } from "./policy-engine";
@@ -19,4 +20,5 @@ export type {
 
 // Re-export for convenience
 import PolicyEngine from "./policy-engine";
+export { BountyForm } from "./ui/BountyForm";
 export default PolicyEngine;

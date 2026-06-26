@@ -11,6 +11,8 @@ on:
 permissions:
   contents: read
   security-events: write
+  issues: write
+  pull-requests: write
 
 jobs:
   scanner-engine:
@@ -32,6 +34,13 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@cargo-audit
+
+      - name: Audit Rust dependencies for known vulnerabilities
+        run: cargo audit --deny warnings
+        working-directory: scanner-engine
 
       - name: Build scanner-engine
         run: cargo build --release
@@ -61,7 +70,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
           cache: "npm"
           cache-dependency-path: anomaly-detector/package-lock.json
 
@@ -81,7 +90,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
           cache: "npm"
           cache-dependency-path: verifiable-audit-trail/package-lock.json
 
@@ -100,32 +109,32 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: src/audit-guard/package-lock.json
+
+      - name: Install audit-guard dependencies
+        run: npm ci
+        working-directory: src/audit-guard
+
       - name: Download scan report
         uses: actions/download-artifact@v4
         with:
           name: scan-report
           path: reports/
 
-      - name: Evaluate findings
-        run: |
-          python3 - <<'EOF'
-          import json, sys
-          with open("reports/latest-scan.json") as f:
-              report = json.load(f)
-          findings = report.get("findings", [])
-          critical = [x for x in findings if x.get("severity") == "CRITICAL"]
-          print(f"Total findings : {len(findings)}")
-          print(f"Critical       : {len(critical)}")
-          if critical:
-              print("CRITICAL findings:")
-              for c in critical:
-                  print(f"  {c['file']}:{c['line']} — {c['rule']}")
-              sys.exit(1)
-          print("✅ Security health check passed.")
-          EOF
+      - name: Run security gate
+        run: npm run security-gate
+        working-directory: src/audit-guard
+        env:
+          SCAN_REPORT_FILE: ../../reports/latest-scan.json
+          SECURITY_SEVERITY_THRESHOLD: "3"
 
       - name: Post status to PR
-        if: github.event_name == 'pull_request'
+        if: success() && github.event_name == 'pull_request'
+        continue-on-error: true
         uses: actions/github-script@v7
         with:
           script: |
@@ -133,5 +142,5 @@ jobs:
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: "✅ **Vero Security Health Check passed.** No CRITICAL findings detected."
+              body: "✅ **Vero Security Health Check passed.** No findings above severity threshold."
             });
