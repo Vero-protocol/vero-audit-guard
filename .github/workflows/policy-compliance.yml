@@ -127,6 +127,9 @@ jobs:
               }
             }
             
+            // Push alerts to Guardian Dashboard if configured
+            await engine.reportToDashboard(result, prData);
+
             // Save result
             fs.writeFileSync('/tmp/policy-result.json', JSON.stringify(result, null, 2));
             
@@ -135,10 +138,8 @@ jobs:
             console.log('REPORT<<EOF\n' + report + '\nEOF');
             
             // Set status
-            if (process.env.GITHUB_OUTPUT) {
-              fs.appendFileSync(process.env.GITHUB_OUTPUT, `status=${result.status}\n`);
-              fs.appendFileSync(process.env.GITHUB_OUTPUT, `violations=${result.violations_count}\n`);
-            }
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, `status=${result.status}\n`);
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, `violations=${result.violations_count}\n`);
             
             process.exit(result.violations.length > 0 ? 1 : 0);
           })().catch(e => {
@@ -147,6 +148,8 @@ jobs:
           });
           EOF
         env:
+          GUARDIAN_DASH_URL: ${{ secrets.GUARDIAN_DASH_URL }}
+          GUARDIAN_DASH_TOKEN: ${{ secrets.GUARDIAN_DASH_TOKEN }}
           MAINTENANCE_MODE: ${{ vars.MAINTENANCE_MODE }}
           MAINTENANCE_MESSAGE: ${{ vars.MAINTENANCE_MESSAGE }}
         working-directory: src/audit-guard
