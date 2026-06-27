@@ -248,6 +248,178 @@ describe("PolicyEngine", () => {
     });
   });
 
+  describe("Cryptographic Security", () => {
+    it("should flag MD5 usage", async () => {
+      const prData: PRData = {
+        pull_request: {
+          title: "Update hash function",
+          body: "This PR uses MD5 for hashing",
+          labels: ["security"],
+          base_branch: "main",
+          head_branch: "feat/hash",
+          number: 1,
+          author: "user",
+        },
+        files_modified: ["src/hash.ts"],
+        file_contents: {
+          "src/hash.ts": "const hash = md5(data);",
+        },
+        additions: 10,
+        deletions: 2,
+      };
+
+      const result = await engine.evaluate(prData);
+      expect(result.status).toBe("NON_COMPLIANT");
+      expect(
+        result.violations.some(
+          (v) =>
+            v.rule === "INSECURE_CRYPTO_ALGORITHM" && v.message.includes("MD5")
+        )
+      ).toBe(true);
+    });
+
+    it("should flag MD5 usage in string literals", async () => {
+      const prData: PRData = {
+        pull_request: {
+          title: "Update hash function",
+          body: "This PR uses MD5 in createHash",
+          labels: ["security"],
+          base_branch: "main",
+          head_branch: "feat/hash",
+          number: 1,
+          author: "user",
+        },
+        files_modified: ["src/hash.ts"],
+        file_contents: {
+          "src/hash.ts": "const hash = crypto.createHash('md5').update(data).digest('hex');",
+        },
+        additions: 10,
+        deletions: 2,
+      };
+
+      const result = await engine.evaluate(prData);
+      expect(result.status).toBe("NON_COMPLIANT");
+      expect(
+        result.violations.some(
+          (v) =>
+            v.rule === "INSECURE_CRYPTO_ALGORITHM" && v.message.includes("MD5")
+        )
+      ).toBe(true);
+    });
+
+    it("should flag SHA1 usage", async () => {
+      const prData: PRData = {
+        pull_request: {
+          title: "Update hash function",
+          body: "This PR uses SHA1 for hashing",
+          labels: ["security"],
+          base_branch: "main",
+          head_branch: "feat/hash",
+          number: 1,
+          author: "user",
+        },
+        files_modified: ["src/hash.ts"],
+        file_contents: {
+          "src/hash.ts": "const hash = sha1(data);",
+        },
+        additions: 10,
+        deletions: 2,
+      };
+
+      const result = await engine.evaluate(prData);
+      expect(result.status).toBe("NON_COMPLIANT");
+      expect(
+        result.violations.some(
+          (v) =>
+            v.rule === "INSECURE_CRYPTO_ALGORITHM" && v.message.includes("SHA1")
+        )
+      ).toBe(true);
+    });
+
+    it("should flag RC4 usage", async () => {
+      const prData: PRData = {
+        pull_request: {
+          title: "Update cipher",
+          body: "This PR uses RC4",
+          labels: ["security"],
+          base_branch: "main",
+          head_branch: "feat/cipher",
+          number: 1,
+          author: "user",
+        },
+        files_modified: ["src/cipher.ts"],
+        file_contents: {
+          "src/cipher.ts": "const cipher = rc4(key);",
+        },
+        additions: 10,
+        deletions: 2,
+      };
+
+      const result = await engine.evaluate(prData);
+      expect(result.status).toBe("NON_COMPLIANT");
+      expect(
+        result.violations.some(
+          (v) =>
+            v.rule === "INSECURE_CRYPTO_ALGORITHM" && v.message.includes("RC4")
+        )
+      ).toBe(true);
+    });
+
+    it("should flag DES usage", async () => {
+      const prData: PRData = {
+        pull_request: {
+          title: "Update cipher",
+          body: "This PR uses DES",
+          labels: ["security"],
+          base_branch: "main",
+          head_branch: "feat/cipher",
+          number: 1,
+          author: "user",
+        },
+        files_modified: ["src/cipher.ts"],
+        file_contents: {
+          "src/cipher.ts": "const cipher = des(key);",
+        },
+        additions: 10,
+        deletions: 2,
+      };
+
+      const result = await engine.evaluate(prData);
+      expect(result.status).toBe("NON_COMPLIANT");
+      expect(
+        result.violations.some(
+          (v) =>
+            v.rule === "INSECURE_CRYPTO_ALGORITHM" && v.message.includes("DES")
+        )
+      ).toBe(true);
+    });
+
+    it("should not flag modern crypto like SHA256", async () => {
+      const prData: PRData = {
+        pull_request: {
+          title: "Update hash function",
+          body: "This PR uses SHA256 for hashing",
+          labels: ["security"],
+          base_branch: "main",
+          head_branch: "feat/hash",
+          number: 1,
+          author: "user",
+        },
+        files_modified: ["src/hash.ts"],
+        file_contents: {
+          "src/hash.ts": "const hash = sha256(data);",
+        },
+        additions: 10,
+        deletions: 2,
+      };
+
+      const result = await engine.evaluate(prData);
+      expect(
+        result.violations.some((v) => v.rule === "INSECURE_CRYPTO_ALGORITHM")
+      ).toBe(false);
+    });
+  });
+
   describe("Large Changes", () => {
     it("should warn about many files modified", async () => {
       const files = Array.from({ length: 25 }, (_, i) => `src/file${i}.ts`);

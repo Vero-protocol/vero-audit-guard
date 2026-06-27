@@ -86,15 +86,38 @@ jobs:
 
       - name: Run policy evaluation
         id: evaluation
+        env:
+          CHANGED_FILES: ${{ steps.changed-files.outputs.files }}
         run: |
           node <<'EOF'
           const PolicyEngine = require('./dist/policy-engine').default;
           const fs = require('fs');
           
-          // Load PR data
+          // Load PR data (already contains file_contents from extract-pr-data step if run locally)
           const prData = JSON.parse(fs.readFileSync('/tmp/pr-data.json', 'utf-8'));
-          prData.files_modified = ${{ steps.changed-files.outputs.files }};
           
+          // In CI, we update files_modified and file_contents from the accurate list
+          try {
+            const files = JSON.parse(process.env.CHANGED_FILES || '[]');
+            if (files.length > 0) {
+              prData.files_modified = files;
+
+              // Populate file contents for signature verification
+              prData.file_contents = prData.file_contents || {};
+              for (const file of prData.files_modified) {
+                if (file && fs.existsSync(file)) {
+                  try {
+                    prData.file_contents[file] = fs.readFileSync(file, 'utf-8');
+                  } catch (e) {
+                    console.warn(`Warning: Could not read file ${file}`);
+                  }
+                }
+              }
+            }
+          } catch (e) {
+            console.error('Error processing changed files:', e);
+          }
+
           // Evaluate
           const engine = new PolicyEngine();
           (async () => {
