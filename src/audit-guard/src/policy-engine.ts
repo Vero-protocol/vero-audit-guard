@@ -58,6 +58,8 @@ export interface EvaluationResult {
   warnings_count: number;
   high_severity_violations: PolicyViolation[];
   anchored_tx?: string;
+  security_tip?: SecurityTip;
+  maintenance_alert?: string;
 }
 
 /**
@@ -495,6 +497,14 @@ export class PolicyEngine {
       report += "---\n";
       report +=
         "_All mandatory compliance checks passed. Review warnings to ensure best practices._\n";
+    }
+
+    // Security training section
+    if (result.security_tip) {
+      report += "\n---\n";
+      report += "### 🎓 Security Training\n\n";
+      report += `**${result.security_tip.title}**\n\n`;
+      report += `${result.security_tip.content}\n`;
     }
 
     return report;
