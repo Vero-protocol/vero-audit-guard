@@ -91,24 +91,39 @@ jobs:
 
       - name: Run policy evaluation
         id: evaluation
+        env:
+          CHANGED_FILES: ${{ steps.changed-files.outputs.files }}
         run: |
           node <<'EOF'
           const PolicyEngine = require('./dist/policy-engine').default;
           const AuditTrail = require('./dist/audit-trail').default;
           const fs = require('fs');
           
-          // Load PR data
+          // Load PR data (already contains file_contents from extract-pr-data step if run locally)
           const prData = JSON.parse(fs.readFileSync('/tmp/pr-data.json', 'utf-8'));
-          prData.files_modified = ${{ steps.changed-files.outputs.files }};
-
-          // Add maintenance info from environment
-          if (process.env.MAINTENANCE_MODE === 'true') {
-            prData.maintenance_mode = true;
-            if (process.env.MAINTENANCE_MESSAGE) {
-              prData.maintenance_message = process.env.MAINTENANCE_MESSAGE;
-            }
-          }
           
+          // In CI, we update files_modified and file_contents from the accurate list
+          try {
+            const files = JSON.parse(process.env.CHANGED_FILES || '[]');
+            if (files.length > 0) {
+              prData.files_modified = files;
+
+              // Populate file contents for signature verification
+              prData.file_contents = prData.file_contents || {};
+              for (const file of prData.files_modified) {
+                if (file && fs.existsSync(file)) {
+                  try {
+                    prData.file_contents[file] = fs.readFileSync(file, 'utf-8');
+                  } catch (e) {
+                    console.warn(`Warning: Could not read file ${file}`);
+                  }
+                }
+              }
+            }
+          } catch (e) {
+            console.error('Error processing changed files:', e);
+          }
+
           // Evaluate
           const engine = new PolicyEngine();
           (async () => {
@@ -138,8 +153,11 @@ jobs:
             console.log('REPORT<<EOF\n' + report + '\nEOF');
             
             // Set status
-            fs.appendFileSync(process.env.GITHUB_OUTPUT, `status=${result.status}\n`);
-            fs.appendFileSync(process.env.GITHUB_OUTPUT, `violations=${result.violations_count}\n`);
+            const githubOutput = process.env.GITHUB_OUTPUT;
+            if (githubOutput) {
+              fs.appendFileSync(githubOutput, `status=${result.status}\n`);
+              fs.appendFileSync(githubOutput, `violations=${result.violations_count}\n`);
+            }
             
             process.exit(result.violations.length > 0 ? 1 : 0);
           })().catch(e => {

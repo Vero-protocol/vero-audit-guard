@@ -12,6 +12,7 @@ permissions:
   contents: read
   security-events: write
   pull-requests: write
+  issues: write
 
 jobs:
   scanner-engine:

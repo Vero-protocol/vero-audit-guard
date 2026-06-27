@@ -27,6 +27,17 @@ async function extractPRData() {
     console.warn("Warning: Could not parse changed files JSON");
   }
 
+  const file_contents = {};
+  for (const file of changedFiles) {
+    if (fs.existsSync(file)) {
+      try {
+        file_contents[file] = fs.readFileSync(file, "utf-8");
+      } catch (e) {
+        console.warn(`Warning: Could not read file content for ${file}`);
+      }
+    }
+  }
+
   const prData = {
     pull_request: {
       title: context.prTitle,
@@ -38,6 +49,7 @@ async function extractPRData() {
       author: context.prAuthor,
     },
     files_modified: changedFiles,
+    file_contents,
     additions: context.additions,
     deletions: context.deletions,
   };
