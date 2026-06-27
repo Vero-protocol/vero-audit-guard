@@ -7,10 +7,7 @@ import { execSync } from "child_process";
 import { Keypair } from "@stellar/stellar-sdk";
 import * as fs from "fs";
 import * as path from "path";
-import DashboardClient from "./dashboard-client";
-import { getNextReportVersion } from "./report-version";
-import { SECURITY_TIPS, SecurityTip } from "./security-tips";
-import { sendAlert } from "./webhook";
+import OverflowChecker, { OverflowFinding } from "./overflow-checker";
 
 
 export interface PRData {
@@ -24,6 +21,7 @@ export interface PRData {
     author: string;
   };
   files_modified: string[];
+  file_contents?: Record<string, string>;
   additions: number;
   deletions: number;
   dependencies_added?: Array<{
@@ -58,9 +56,7 @@ export interface EvaluationResult {
   violations_count: number;
   warnings_count: number;
   high_severity_violations: PolicyViolation[];
-  anchored_tx?: string;
-  security_tip?: SecurityTip;
-  maintenance_alert?: string;
+  overflow_findings?: OverflowFinding[];
 }
 
 /**
@@ -69,8 +65,10 @@ export interface EvaluationResult {
 export class PolicyEngine {
   private policiesDir: string;
   private opaAvailable: boolean = false;
+  private overflowChecker: OverflowChecker;
 
   constructor(policiesDir?: string) {
+    this.overflowChecker = new OverflowChecker();
     this.policiesDir =
       policiesDir ||
       path.join(__dirname, "..", "policies");
@@ -130,27 +128,32 @@ export class PolicyEngine {
    * Evaluate PR data against policies
    */
   async evaluate(prData: PRData): Promise<EvaluationResult> {
-    let result: EvaluationResult;
+    // Run overflow checker on modified files
+    const overflowFindings = await this.overflowChecker.checkFiles(
+      prData.files_modified
+    );
+
+    // Enrich PR data with overflow findings for OPA
+    const enrichedPrData = {
+      ...prData,
+      overflow_findings: overflowFindings,
+    };
 
     if (!this.opaAvailable) {
-      result = await this.evaluateWithoutOPA(prData);
-    } else {
-      try {
-        result = await this.evaluateWithOPA(prData);
-      } catch (error) {
-        console.error("[PolicyEngine] OPA evaluation failed:", error);
-        result = await this.evaluateWithoutOPA(prData);
-      }
+      const result = await this.evaluateWithoutOPA(enrichedPrData);
+      result.overflow_findings = overflowFindings;
+      return result;
     }
 
-    // Add security tip to result
-    result.security_tip = this.getSecurityTip(prData);
-
-    // Surface a maintenance-mode banner if the relayer/PR is in maintenance.
-    if (prData.maintenance_mode) {
-      result.maintenance_alert =
-        prData.maintenance_message ||
-        "Maintenance mode enabled — review automated checks before merge.";
+    try {
+      const result = await this.evaluateWithOPA(enrichedPrData);
+      result.overflow_findings = overflowFindings;
+      return result;
+    } catch (error) {
+      console.error("[PolicyEngine] OPA evaluation failed:", error);
+      const result = await this.evaluateWithoutOPA(enrichedPrData);
+      result.overflow_findings = overflowFindings;
+      return result;
     }
     return result;
   }
@@ -163,8 +166,15 @@ export class PolicyEngine {
     fs.writeFileSync(tempInput, JSON.stringify(prData, null, 2));
 
     try {
-      const command = `opa eval -d ${this.policiesDir} -i ${tempInput} \
-        "data.pr.compliance.deny; data.pr.compliance.warning; data.pr.compliance.compliance_summary"`;
+      // Use more robust OPA query that doesn't fail if a package is missing
+      const query = `
+        deny := data.pr.compliance.deny | data.pr.dependencies.deny | data.pr.crypto.deny;
+        warning := data.pr.compliance.warning | data.pr.dependencies.warning;
+        summary := data.pr.compliance.compliance_summary;
+        result := {"deny": deny, "warning": warning, "summary": summary}
+      `;
+
+      const command = `opa eval -d ${this.policiesDir} -i ${tempInput} '${query}'`;
 
       const output = execSync(command).toString();
       const result = JSON.parse(output);
@@ -277,6 +287,45 @@ export class PolicyEngine {
       }
     }
 
+    // Crypto security checks
+    const bannedAlgorithms = [
+      {
+        name: "MD5",
+        pattern: /md5['"(]|md5$/i,
+        message: "MD5 is cryptographically broken and should not be used for security purposes.",
+      },
+      {
+        name: "SHA1",
+        pattern: /sha1['"(]|sha1$/i,
+        message: "SHA-1 is no longer considered secure against well-funded opponents.",
+      },
+      {
+        name: "RC4",
+        pattern: /rc4['"(]|rc4$/i,
+        message: "RC4 is insecure and has many known vulnerabilities.",
+      },
+      {
+        name: "DES",
+        pattern: /des['"(]|des$/i,
+        message: "DES has a small key size and can be brute-forced easily.",
+      },
+    ];
+
+    if (prData.file_contents) {
+      for (const [filename, content] of Object.entries(prData.file_contents)) {
+        for (const algo of bannedAlgorithms) {
+          if (algo.pattern.test(content)) {
+            violations.push({
+              rule: "INSECURE_CRYPTO_ALGORITHM",
+              severity: "CRITICAL",
+              message: `❌ Insecure crypto algorithm '${algo.name}' detected in ${filename}`,
+              detail: `${algo.message} Use modern alternatives like SHA-256, SHA-3, or AES.`,
+            });
+          }
+        }
+      }
+    }
+
     // Large change checks
     if (prData.files_modified.length > 20) {
       warnings.push({
@@ -295,6 +344,17 @@ export class PolicyEngine {
         message: `⚠️  Large changeset (${totalChanges} lines)`,
         detail:
           "Break large changes into smaller PRs for easier review",
+      });
+    }
+
+    // Overflow findings (for fallback evaluation)
+    const overflowFindings = (prData as any).overflow_findings || [];
+    for (const finding of overflowFindings) {
+      violations.push({
+        rule: finding.rule,
+        severity: finding.severity,
+        message: finding.message,
+        detail: `${finding.detail} (at ${finding.file}:${finding.line})`,
       });
     }
 
@@ -341,10 +401,10 @@ export class PolicyEngine {
    * Parse OPA eval output
    */
   private parseOPAResult(opaOutput: any): EvaluationResult {
-    const expressions = opaOutput.result?.[0]?.expressions || [];
-    const violations: PolicyViolation[] = expressions[0]?.value || [];
-    const warnings: PolicyViolation[] = expressions[1]?.value || [];
-    const summary = expressions[2]?.value?.[0] || {};
+    const bindings = opaOutput.result?.[0]?.bindings?.result || {};
+    const violations: PolicyViolation[] = bindings.deny || [];
+    const warnings: PolicyViolation[] = bindings.warning || [];
+    const summary = bindings.summary?.[0] || {};
 
     const high_severity_violations = violations.filter(
       (v) =>

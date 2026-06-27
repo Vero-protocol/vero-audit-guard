@@ -3,7 +3,8 @@
  */
 
 import PolicyEngine, { PRData } from "../src/policy-engine";
-import { Keypair } from "@stellar/stellar-sdk";
+import * as fs from "fs";
+import * as path from "path";
 
 describe("PolicyEngine", () => {
   let engine: PolicyEngine;
@@ -278,6 +279,178 @@ describe("PolicyEngine", () => {
     });
   });
 
+  describe("Cryptographic Security", () => {
+    it("should flag MD5 usage", async () => {
+      const prData: PRData = {
+        pull_request: {
+          title: "Update hash function",
+          body: "This PR uses MD5 for hashing",
+          labels: ["security"],
+          base_branch: "main",
+          head_branch: "feat/hash",
+          number: 1,
+          author: "user",
+        },
+        files_modified: ["src/hash.ts"],
+        file_contents: {
+          "src/hash.ts": "const hash = md5(data);",
+        },
+        additions: 10,
+        deletions: 2,
+      };
+
+      const result = await engine.evaluate(prData);
+      expect(result.status).toBe("NON_COMPLIANT");
+      expect(
+        result.violations.some(
+          (v) =>
+            v.rule === "INSECURE_CRYPTO_ALGORITHM" && v.message.includes("MD5")
+        )
+      ).toBe(true);
+    });
+
+    it("should flag MD5 usage in string literals", async () => {
+      const prData: PRData = {
+        pull_request: {
+          title: "Update hash function",
+          body: "This PR uses MD5 in createHash",
+          labels: ["security"],
+          base_branch: "main",
+          head_branch: "feat/hash",
+          number: 1,
+          author: "user",
+        },
+        files_modified: ["src/hash.ts"],
+        file_contents: {
+          "src/hash.ts": "const hash = crypto.createHash('md5').update(data).digest('hex');",
+        },
+        additions: 10,
+        deletions: 2,
+      };
+
+      const result = await engine.evaluate(prData);
+      expect(result.status).toBe("NON_COMPLIANT");
+      expect(
+        result.violations.some(
+          (v) =>
+            v.rule === "INSECURE_CRYPTO_ALGORITHM" && v.message.includes("MD5")
+        )
+      ).toBe(true);
+    });
+
+    it("should flag SHA1 usage", async () => {
+      const prData: PRData = {
+        pull_request: {
+          title: "Update hash function",
+          body: "This PR uses SHA1 for hashing",
+          labels: ["security"],
+          base_branch: "main",
+          head_branch: "feat/hash",
+          number: 1,
+          author: "user",
+        },
+        files_modified: ["src/hash.ts"],
+        file_contents: {
+          "src/hash.ts": "const hash = sha1(data);",
+        },
+        additions: 10,
+        deletions: 2,
+      };
+
+      const result = await engine.evaluate(prData);
+      expect(result.status).toBe("NON_COMPLIANT");
+      expect(
+        result.violations.some(
+          (v) =>
+            v.rule === "INSECURE_CRYPTO_ALGORITHM" && v.message.includes("SHA1")
+        )
+      ).toBe(true);
+    });
+
+    it("should flag RC4 usage", async () => {
+      const prData: PRData = {
+        pull_request: {
+          title: "Update cipher",
+          body: "This PR uses RC4",
+          labels: ["security"],
+          base_branch: "main",
+          head_branch: "feat/cipher",
+          number: 1,
+          author: "user",
+        },
+        files_modified: ["src/cipher.ts"],
+        file_contents: {
+          "src/cipher.ts": "const cipher = rc4(key);",
+        },
+        additions: 10,
+        deletions: 2,
+      };
+
+      const result = await engine.evaluate(prData);
+      expect(result.status).toBe("NON_COMPLIANT");
+      expect(
+        result.violations.some(
+          (v) =>
+            v.rule === "INSECURE_CRYPTO_ALGORITHM" && v.message.includes("RC4")
+        )
+      ).toBe(true);
+    });
+
+    it("should flag DES usage", async () => {
+      const prData: PRData = {
+        pull_request: {
+          title: "Update cipher",
+          body: "This PR uses DES",
+          labels: ["security"],
+          base_branch: "main",
+          head_branch: "feat/cipher",
+          number: 1,
+          author: "user",
+        },
+        files_modified: ["src/cipher.ts"],
+        file_contents: {
+          "src/cipher.ts": "const cipher = des(key);",
+        },
+        additions: 10,
+        deletions: 2,
+      };
+
+      const result = await engine.evaluate(prData);
+      expect(result.status).toBe("NON_COMPLIANT");
+      expect(
+        result.violations.some(
+          (v) =>
+            v.rule === "INSECURE_CRYPTO_ALGORITHM" && v.message.includes("DES")
+        )
+      ).toBe(true);
+    });
+
+    it("should not flag modern crypto like SHA256", async () => {
+      const prData: PRData = {
+        pull_request: {
+          title: "Update hash function",
+          body: "This PR uses SHA256 for hashing",
+          labels: ["security"],
+          base_branch: "main",
+          head_branch: "feat/hash",
+          number: 1,
+          author: "user",
+        },
+        files_modified: ["src/hash.ts"],
+        file_contents: {
+          "src/hash.ts": "const hash = sha256(data);",
+        },
+        additions: 10,
+        deletions: 2,
+      };
+
+      const result = await engine.evaluate(prData);
+      expect(
+        result.violations.some((v) => v.rule === "INSECURE_CRYPTO_ALGORITHM")
+      ).toBe(false);
+    });
+  });
+
   describe("Large Changes", () => {
     it("should warn about many files modified", async () => {
       const files = Array.from({ length: 25 }, (_, i) => `src/file${i}.ts`);
@@ -390,70 +563,108 @@ Updated CHANGELOG.md with new feature.
     });
   });
 
-  describe("Security Training Tips", () => {
-    it("should include a security tip in the result", async () => {
+  describe("Integer Overflow Detection", () => {
+    const testFile = path.join(__dirname, "overflow-test.rs");
+
+    afterEach(() => {
+      if (fs.existsSync(testFile)) {
+        fs.unlinkSync(testFile);
+      }
+    });
+
+    it("should flag potential overflow in Rust file", async () => {
+      const content = `
+        fn test() {
+          let a = 10000000000000000000;
+          let b = a * 2;
+        }
+      `;
+      fs.writeFileSync(testFile, content);
+
       const prData: PRData = {
         pull_request: {
-          title: "Update dependencies",
-          body: "Updating npm packages",
-          labels: [],
+          title: "Fix overflow bug in core contract",
+          body: "This PR fixes a potential overflow. Testing included.",
+          labels: ["security"],
           base_branch: "main",
-          head_branch: "deps",
-          number: 100,
-          author: "bot",
+          head_branch: "fix/overflow",
+          number: 1,
+          author: "security-expert",
         },
-        files_modified: ["package.json"],
-        additions: 5,
+        files_modified: [testFile],
+        additions: 10,
         deletions: 2,
       };
 
       const result = await engine.evaluate(prData);
-      expect(result.security_tip).toBeDefined();
-      expect(result.security_tip?.title).toBe("Dependency Security");
+      expect(result.status).toBe("NON_COMPLIANT");
+      expect(result.violations.some((v) => v.rule === "INTEGER_OVERFLOW")).toBe(
+        true
+      );
     });
 
-    it("should include security training section in markdown report", async () => {
+    it("should flag potential underflow in Rust file", async () => {
+      const content = `
+        fn test() {
+          let a = 5;
+          let b = a - 10;
+        }
+      `;
+      fs.writeFileSync(testFile, content);
+
       const prData: PRData = {
         pull_request: {
-          title: "Fix login bug",
-          body: "Refactored the auth logic",
-          labels: [],
+          title: "Fix underflow bug in core contract",
+          body: "This PR fixes a potential underflow. Testing included.",
+          labels: ["security"],
           base_branch: "main",
-          head_branch: "auth-fix",
-          number: 101,
-          author: "dev",
+          head_branch: "fix/underflow",
+          number: 2,
+          author: "security-expert",
         },
-        files_modified: ["src/auth.ts"],
-        additions: 20,
-        deletions: 10,
+        files_modified: [testFile],
+        additions: 10,
+        deletions: 2,
       };
 
       const result = await engine.evaluate(prData);
-      const report = engine.generateReport(result);
-
-      expect(report).toContain("### 🎓 Security Training");
-      expect(report).toContain("Authentication & Authorization");
+      expect(result.status).toBe("NON_COMPLIANT");
+      expect(result.violations.some((v) => v.rule === "INTEGER_UNDERFLOW")).toBe(
+        true
+      );
     });
 
-    it("should fallback to a default tip based on PR number", async () => {
+    it("should not flag safe arithmetic", async () => {
+      const content = `
+        fn test() {
+          let a = 100;
+          let b = a + 50;
+        }
+      `;
+      fs.writeFileSync(testFile, content);
+
       const prData: PRData = {
         pull_request: {
-          title: "Generic change",
-          body: "Doing some work",
-          labels: [],
+          title: "Safe arithmetic changes",
+          body: "This PR performs safe arithmetic. Tested thoroughly.",
+          labels: ["trivial"],
           base_branch: "main",
-          head_branch: "work",
-          number: 0, // Should map to first tip
-          author: "dev",
+          head_branch: "feat/safe",
+          number: 3,
+          author: "developer",
         },
-        files_modified: ["README.md"],
-        additions: 1,
+        files_modified: [testFile],
+        additions: 5,
         deletions: 1,
       };
 
       const result = await engine.evaluate(prData);
-      expect(result.security_tip).toBeDefined();
-      expect(result.security_tip?.id).toBe("SEC_TIP_SECRET_MGMT");
+      expect(result.violations.some((v) => v.rule === "INTEGER_OVERFLOW")).toBe(
+        false
+      );
+      expect(result.violations.some((v) => v.rule === "INTEGER_UNDERFLOW")).toBe(
+        false
+      );
     });
   });
 });

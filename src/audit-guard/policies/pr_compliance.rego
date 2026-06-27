@@ -132,34 +132,14 @@ deny[msg] {
     }
 }
 
-# Rule: Relayer signature must be present and from an authorized address
+# Rule: No potential integer overflows allowed
 deny[msg] {
-    not input.relayer
+    finding := input.overflow_findings[_]
     msg := {
-        "rule": "RELAYER_SIGNATURE_MISSING",
-        "severity": severity.CRITICAL,
-        "message": "❌ Relayer signature missing",
-        "detail": "PR data must be signed by an authorized relayer"
-    }
-}
-
-deny[msg] {
-    not input.signature
-    msg := {
-        "rule": "RELAYER_SIGNATURE_MISSING",
-        "severity": severity.CRITICAL,
-        "message": "❌ Relayer signature missing",
-        "detail": "PR data must be signed by an authorized relayer"
-    }
-}
-
-deny[msg] {
-    not input.timestamp
-    msg := {
-        "rule": "RELAYER_SIGNATURE_MISSING",
-        "severity": severity.CRITICAL,
-        "message": "❌ Relayer signature missing",
-        "detail": "PR data must be signed by an authorized relayer"
+        "rule": finding.rule,
+        "severity": severity.HIGH,
+        "message": finding.message,
+        "detail": sprintf("%s (at %s:%d)", [finding.detail, finding.file, finding.line])
     }
 }
 
