@@ -11,6 +11,7 @@ on:
 permissions:
   contents: read
   pull-requests: write
+  statuses: write
 
 jobs:
   policy-check:
@@ -108,8 +109,8 @@ jobs:
             console.log('REPORT<<EOF\n' + report + '\nEOF');
             
             // Set status
-            console.log(`::set-output name=status::${result.status}`);
-            console.log(`::set-output name=violations::${result.violations_count}`);
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, `status=${result.status}\n`);
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, `violations=${result.violations_count}\n`);
             
             process.exit(result.violations.length > 0 ? 1 : 0);
           })().catch(e => {
