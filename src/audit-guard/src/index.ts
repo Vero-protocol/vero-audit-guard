@@ -44,3 +44,7 @@ export type {
 } from "./crypto-scanner";
 export { CRYPTO_PATTERNS, CRYPTO_PATTERN_IDS } from "./crypto-patterns";
 export type { CryptoPattern, CryptoDetectionContext } from "./crypto-patterns";
+
+// Issue #96: Rust safety standards integration
+export { default as RustSafetyScanner } from "./rust-safety-scanner";
+export type { RustSafetyFinding } from "./rust-safety-scanner";
