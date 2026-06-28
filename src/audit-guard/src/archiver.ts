@@ -64,7 +64,7 @@ export class LogArchiver {
       Key: key,
       Body: compressed,
     });
-    await this.s3.send(putCommand);
+    await (this.s3 as any).send(putCommand);
     await fs.promises.unlink(filePath);
     console.log(`[LogArchiver] Archived and removed ${filePath}`);
   }
