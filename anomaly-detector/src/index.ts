@@ -13,6 +13,7 @@ import { sendAlert } from "../../src/audit-guard/src/webhook";
 import * as path from "path";
 
 import { ThreatFeedFetcher } from "./audit-guard/threat-feed-fetcher";
+import { RpcFailoverMonitor } from "./rpc-failover-monitor";
 
 interface NodeStatus {
   url: string;
@@ -114,8 +115,12 @@ const POLL_INTERVAL_MS = Number(process.env.POLL_INTERVAL_MS ?? 5000);
 
 const RPC_NODE_URLS = (process.env.RPC_NODE_URLS ?? "").split(",").filter(Boolean);
 
-const nodeHealthChecker = RPC_NODE_URLS.length > 0 
+const nodeHealthChecker = RPC_NODE_URLS.length > 0
   ? new NodeHealthChecker(RPC_NODE_URLS)
+  : null;
+
+const rpcFailoverMonitor = RPC_NODE_URLS.length > 0
+  ? new RpcFailoverMonitor()
   : null;
 
 const DB_PATH = path.join(__dirname, "nonce-db.json");
@@ -250,6 +255,13 @@ async function monitor(): Promise<void> {
         alert: `Node failover: ${oldUrl} → ${newUrl}`,
         timestamp: new Date().toISOString(),
       });
+      if (rpcFailoverMonitor) {
+        const event = rpcFailoverMonitor.recordFailover(oldUrl, newUrl);
+        console.log(`[rpc-failover-monitor] Failover latency: ${event.latencyMs}ms`);
+        if (event.slowFailover) {
+          console.warn(`[rpc-failover-monitor] WARNING: Slow failover detected (${event.latencyMs}ms > threshold)`);
+        }
+      }
     });
 
     const initialStatus = await nodeHealthChecker.checkHealth();
@@ -267,6 +279,16 @@ async function monitor(): Promise<void> {
           if (nodeHealthChecker) {
             const statuses = await nodeHealthChecker.checkHealth();
             console.log("[node-health] Node statuses:", statuses);
+            if (rpcFailoverMonitor) {
+              for (const status of statuses) {
+                rpcFailoverMonitor.recordCheck(status.url, status.healthy);
+              }
+              const degraded = rpcFailoverMonitor.getDegradedEndpoints();
+              if (degraded.length > 0) {
+                console.warn("[rpc-failover-monitor] Degraded endpoints:", degraded);
+              }
+              rpcFailoverMonitor.buildReport();
+            }
           }
         } catch (err) {
           console.error("[node-health] Check error:", (err as Error).message);
