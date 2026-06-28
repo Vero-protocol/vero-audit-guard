@@ -8,6 +8,10 @@ import { Keypair } from "@stellar/stellar-sdk";
 import * as fs from "fs";
 import * as path from "path";
 import OverflowChecker, { OverflowFinding } from "./overflow-checker";
+import { SecurityTip, SECURITY_TIPS } from "./security-tips";
+import DashboardClient from "./dashboard-client";
+import { getNextReportVersion } from "./report-version";
+import { sendAlert } from "./webhook";
 
 
 export interface PRData {
@@ -57,6 +61,9 @@ export interface EvaluationResult {
   warnings_count: number;
   high_severity_violations: PolicyViolation[];
   overflow_findings?: OverflowFinding[];
+  maintenance_alert?: string;
+  anchored_tx?: string;
+  security_tip?: SecurityTip;
 }
 
 /**
@@ -114,7 +121,7 @@ export class PolicyEngine {
     // Find first matching tip
     for (const [tipId, keywords] of Object.entries(keywordMap)) {
       if (keywords.some(kw => allText.includes(kw))) {
-        const tip = SECURITY_TIPS.find(t => t.id === tipId);
+        const tip = SECURITY_TIPS.find((t: SecurityTip) => t.id === tipId);
         if (tip) return tip;
       }
     }
@@ -155,7 +162,6 @@ export class PolicyEngine {
       result.overflow_findings = overflowFindings;
       return result;
     }
-    return result;
   }
 
   /**

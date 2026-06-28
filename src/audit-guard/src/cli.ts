@@ -15,6 +15,7 @@ import {
   evaluateSecurityGateFromJson,
   DEFAULT_SEVERITY_THRESHOLD,
 } from "./security-gate";
+import { RbacMapper, RbacPolicy, RbacScanOptions } from "./rbac-mapper";
 
 async function main() {
   const args = process.argv.slice(2);

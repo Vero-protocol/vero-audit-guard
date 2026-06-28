@@ -44,3 +44,8 @@ export type {
 } from "./crypto-scanner";
 export { CRYPTO_PATTERNS, CRYPTO_PATTERN_IDS } from "./crypto-patterns";
 export type { CryptoPattern, CryptoDetectionContext } from "./crypto-patterns";
+
+// Issue #102: Security Protocol Standards
+export { SecurityProtocol } from "./security-protocol";
+export type { Result, SecurityCheck } from "./security-protocol";
+
