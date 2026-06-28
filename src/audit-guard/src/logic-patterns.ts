@@ -672,6 +672,43 @@ const HARDCODED_API_KEY_LITERAL: LogicPattern = {
   },
 };
 
+// ----------------------------------------------------------------------------
+// Pattern #12: UNSAFE_RUST_BLOCK
+// Detects use of `unsafe` blocks in Rust code.
+// ----------------------------------------------------------------------------
+const UNSAFE_RUST_BLOCK: LogicPattern = {
+  id: "UNSAFE_RUST_BLOCK",
+  title: "Use of `unsafe` block in Rust",
+  description:
+    "An `unsafe` block bypasses Rust's safety guarantees. It should be used sparingly, audited thoroughly, and ideally avoided.",
+  severity: "HIGH",
+  detect: (code, context) => {
+    const { lines } = lookupLines(code, context);
+    const findings: LogicFlawFinding[] = [];
+    if (context?.file && !context.file.endsWith('.rs')) return findings;
+    
+    for (let i = 0; i < lines.length; i++) {
+      if (/\bunsafe\s*\{/.test(lines[i]) || /\bunsafe\s+fn\b/.test(lines[i]) || /\bunsafe\s+trait\b/.test(lines[i]) || /\bunsafe\s+impl\b/.test(lines[i])) {
+        findings.push(
+          makeFinding(
+            {
+              file: context?.file,
+              line: i + 1,
+              ruleId: UNSAFE_RUST_BLOCK.id,
+              severity: UNSAFE_RUST_BLOCK.severity,
+              message: `unsafe Rust code used on line ${i + 1}.`,
+              remediation:
+                "Ensure the unsafe code is necessary and heavily audited. Consider safe alternatives.",
+            },
+            lines
+          )
+        );
+      }
+    }
+    return findings;
+  },
+};
+
 /** Complete pattern library, exposed for callers that want to iterate. */
 export const LOGIC_PATTERNS: readonly LogicPattern[] = Object.freeze([
   REENTRANCY_RISK,
@@ -685,6 +722,7 @@ export const LOGIC_PATTERNS: readonly LogicPattern[] = Object.freeze([
   TX_ORIGIN_AUTHORIZATION,
   EVAL_USAGE,
   HARDCODED_API_KEY_LITERAL,
+  UNSAFE_RUST_BLOCK,
 ]);
 
 export const LOGIC_PATTERN_IDS = LOGIC_PATTERNS.map((p) => p.id);
