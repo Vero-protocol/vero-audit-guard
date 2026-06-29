@@ -1,0 +1,163 @@
+name: Mutation Fuzzing
+
+on:
+  push:
+    branches: ["**"]
+    paths:
+      - "scanner-engine/**"
+      - ".github/workflows/mutation-fuzzing.yml"
+  pull_request:
+    branches: ["**"]
+    paths:
+      - "scanner-engine/**"
+      - ".github/workflows/mutation-fuzzing.yml"
+  schedule:
+    # Run nightly at 02:00 UTC for longer fuzzing windows
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+    inputs:
+      fuzz_duration:
+        description: "Fuzzing duration per target (seconds)"
+        required: false
+        default: "60"
+
+permissions:
+  contents: read
+  security-events: write
+  pull-requests: write
+
+env:
+  CARGO_TERM_COLOR: always
+  # Default fuzz duration: 30s on PRs/pushes, 300s on schedule, or user-supplied
+  FUZZ_DURATION: ${{ github.event.inputs.fuzz_duration || (github.event_name == 'schedule' && '300' || '30') }}
+
+jobs:
+  mutation-fuzzing:
+    name: Mutation Fuzzing (cargo-fuzz / libFuzzer)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install nightly Rust toolchain
+        # cargo-fuzz requires nightly for -Z flags
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src, llvm-tools-preview
+
+      - name: Cache Rust artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            scanner-engine/target
+            scanner-engine/fuzz/target
+          key: ${{ runner.os }}-fuzz-${{ hashFiles('scanner-engine/Cargo.lock', 'scanner-engine/fuzz/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-fuzz-
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      - name: Build fuzz targets
+        working-directory: scanner-engine
+        run: cargo fuzz build
+
+      - name: Run fuzz_scan_file
+        working-directory: scanner-engine
+        run: |
+          cargo fuzz run fuzz_scan_file -- \
+            -max_total_time=${{ env.FUZZ_DURATION }} \
+            -max_len=65536 \
+            -rss_limit_mb=512 \
+            -artifact_prefix=fuzz/artifacts/fuzz_scan_file/
+        continue-on-error: false
+
+      - name: Run fuzz_sha256
+        working-directory: scanner-engine
+        run: |
+          cargo fuzz run fuzz_sha256 -- \
+            -max_total_time=${{ env.FUZZ_DURATION }} \
+            -max_len=65536 \
+            -rss_limit_mb=256 \
+            -artifact_prefix=fuzz/artifacts/fuzz_sha256/
+        continue-on-error: false
+
+      - name: Run fuzz_rule_regex
+        working-directory: scanner-engine
+        run: |
+          cargo fuzz run fuzz_rule_regex -- \
+            -max_total_time=${{ env.FUZZ_DURATION }} \
+            -max_len=4096 \
+            -rss_limit_mb=256 \
+            -artifact_prefix=fuzz/artifacts/fuzz_rule_regex/
+        continue-on-error: false
+
+      - name: Check for crash artifacts
+        id: check_crashes
+        if: always()
+        working-directory: scanner-engine
+        run: |
+          CRASHES=$(find fuzz/artifacts -name "crash-*" -o -name "timeout-*" -o -name "leak-*" 2>/dev/null | wc -l)
+          echo "crash_count=${CRASHES}" >> "$GITHUB_OUTPUT"
+          if [ "$CRASHES" -gt 0 ]; then
+            echo "::error::${CRASHES} fuzzing crash(es)/timeout(s) found. Inspect uploaded artifacts."
+            find fuzz/artifacts -name "crash-*" -o -name "timeout-*" -o -name "leak-*" | \
+              xargs -I{} sh -c 'echo "=== {} ===" && xxd "{}" | head -20'
+            exit 1
+          fi
+
+      - name: Upload crash artifacts
+        if: failure() && steps.check_crashes.outputs.crash_count != '0'
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crashes-${{ github.run_id }}
+          path: scanner-engine/fuzz/artifacts/
+          retention-days: 30
+
+      - name: Upload fuzz corpus
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-corpus-${{ github.run_id }}
+          path: scanner-engine/fuzz/corpus/
+          retention-days: 7
+
+      - name: Generate fuzzing summary
+        if: always()
+        run: |
+          echo "## 🔬 Mutation Fuzzing Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Target | Duration | Status |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|--------|----------|--------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| \`fuzz_scan_file\` | ${{ env.FUZZ_DURATION }}s | ${{ job.status }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| \`fuzz_sha256\` | ${{ env.FUZZ_DURATION }}s | ${{ job.status }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| \`fuzz_rule_regex\` | ${{ env.FUZZ_DURATION }}s | ${{ job.status }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Crashes found: **${{ steps.check_crashes.outputs.crash_count || '0' }}**" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Post PR comment on crash
+        if: failure() && github.event_name == 'pull_request' && steps.check_crashes.outputs.crash_count != '0'
+        continue-on-error: true
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: [
+                "🚨 **Mutation Fuzzing: Crash Detected**",
+                "",
+                `${${{ steps.check_crashes.outputs.crash_count }}} crash artifact(s) found during automated fuzzing.`,
+                "Download the `fuzz-crashes-${{ github.run_id }}` artifact from the Actions run for reproduction inputs.",
+                "",
+                "To reproduce locally:",
+                "```bash",
+                "cd scanner-engine",
+                "cargo fuzz run fuzz_scan_file fuzz/artifacts/fuzz_scan_file/crash-<hash>",
+                "```"
+              ].join("\n")
+            });
