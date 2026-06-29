@@ -1,0 +1,37 @@
+[package]
+name = "vero-scanner-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.vero-scanner-engine]
+path = ".."
+
+# Fuzz targets must be compiled with sanitizers; opt-out of LTO for speed.
+[profile.release]
+debug = true
+opt-level = 3
+
+[[bin]]
+name = "fuzz_scan_file"
+path = "fuzz_targets/fuzz_scan_file.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_sha256"
+path = "fuzz_targets/fuzz_sha256.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_rule_regex"
+path = "fuzz_targets/fuzz_rule_regex.rs"
+test = false
+doc = false

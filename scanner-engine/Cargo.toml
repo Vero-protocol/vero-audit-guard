@@ -3,6 +3,14 @@ name = "vero-scanner-engine"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "vero_scanner_engine"
+path = "src/lib.rs"
+
+[[bin]]
+name = "scanner"
+path = "src/main.rs"
+
 [dependencies]
 sha2 = "0.10"
 hex = "0.4"
@@ -12,6 +20,5 @@ walkdir = "2"
 regex = "1"
 rayon = "1"
 
-[[bin]]
-name = "scanner"
-path = "src/main.rs"
+[workspace]
+members = [".", "fuzz"]
