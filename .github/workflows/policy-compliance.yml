@@ -170,10 +170,9 @@ jobs:
           GUARDIAN_DASH_TOKEN: ${{ secrets.GUARDIAN_DASH_TOKEN }}
           MAINTENANCE_MODE: ${{ vars.MAINTENANCE_MODE }}
           MAINTENANCE_MESSAGE: ${{ vars.MAINTENANCE_MESSAGE }}
-        working-directory: src/audit-guard
-        env:
           ANCHOR_ON_CHAIN: "true"
           AUDIT_KEYPAIR_SECRET: ${{ secrets.AUDIT_KEYPAIR_SECRET }}
+        working-directory: src/audit-guard
 
       - name: Comment PR with policy result
         if: always()
