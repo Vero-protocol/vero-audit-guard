@@ -91,8 +91,15 @@ jobs:
 
       - name: Run policy evaluation
         id: evaluation
+        working-directory: src/audit-guard
         env:
           CHANGED_FILES: ${{ steps.changed-files.outputs.files }}
+          GUARDIAN_DASH_URL: ${{ secrets.GUARDIAN_DASH_URL }}
+          GUARDIAN_DASH_TOKEN: ${{ secrets.GUARDIAN_DASH_TOKEN }}
+          MAINTENANCE_MODE: ${{ vars.MAINTENANCE_MODE }}
+          MAINTENANCE_MESSAGE: ${{ vars.MAINTENANCE_MESSAGE }}
+          ANCHOR_ON_CHAIN: "true"
+          AUDIT_KEYPAIR_SECRET: ${{ secrets.AUDIT_KEYPAIR_SECRET }}
         run: |
           node <<'EOF'
           const PolicyEngine = require('./dist/policy-engine').default;
@@ -165,15 +172,6 @@ jobs:
             process.exit(1);
           });
           EOF
-        env:
-          GUARDIAN_DASH_URL: ${{ secrets.GUARDIAN_DASH_URL }}
-          GUARDIAN_DASH_TOKEN: ${{ secrets.GUARDIAN_DASH_TOKEN }}
-          MAINTENANCE_MODE: ${{ vars.MAINTENANCE_MODE }}
-          MAINTENANCE_MESSAGE: ${{ vars.MAINTENANCE_MESSAGE }}
-        working-directory: src/audit-guard
-        env:
-          ANCHOR_ON_CHAIN: "true"
-          AUDIT_KEYPAIR_SECRET: ${{ secrets.AUDIT_KEYPAIR_SECRET }}
 
       - name: Comment PR with policy result
         if: always()
