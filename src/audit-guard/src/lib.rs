@@ -1,62 +1,62 @@
-//! Vero Audit Guard Module
-//!
-//! Standardizing security protocols and improving system resilience against vulnerabilities.
-//! Adherence to Rust safety standards and integration with existing Audit-Guard API.
-
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use thiserror::Error;
+use std::error::Error;
 
-/// Errors that can occur within the Audit Guard module.
-#[derive(Debug, Error)]
-pub enum AuditGuardError {
-    #[error("Security protocol violation: {0}")]
-    ProtocolViolation(String),
-    #[error("API Integration Error: {0}")]
-    ApiIntegrationError(String),
-    #[error("Validation Error: {0}")]
-    ValidationError(String),
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AuditReport {
+    pub policy_name: String,
+    pub compliant: bool,
+    pub violations: Vec<String>,
 }
 
-/// Core protocol structure for the Audit Guard.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AuditGuardProtocol {
-    pub protocol_version: String,
-    pub strict_mode: bool,
+pub struct AuditGuardClient {
+    client: Client,
+    api_url: String,
 }
 
-impl AuditGuardProtocol {
-    /// Creates a new instance of the Audit Guard Protocol.
-    pub fn new(strict_mode: bool) -> Self {
+impl AuditGuardClient {
+    /// Creates a new AuditGuardClient
+    ///
+    /// # Arguments
+    ///
+    /// * `api_url` - The base URL of the existing Audit-Guard API
+    pub fn new(api_url: &str) -> Self {
         Self {
-            protocol_version: "1.0.0".to_string(),
-            strict_mode,
+            client: Client::new(),
+            api_url: api_url.to_string(),
         }
     }
 
-    /// Verifies the incoming security payload.
-    /// Ensures adherence to Rust safety standards and system resilience.
-    pub fn verify_payload(&self, payload: &str) -> Result<bool, AuditGuardError> {
-        if self.strict_mode && payload.trim().is_empty() {
-            return Err(AuditGuardError::ProtocolViolation("Payload cannot be empty in strict mode".to_string()));
+    /// Submits an audit report to the API
+    /// This adheres to Rust safety standards by avoiding raw pointers,
+    /// using safe abstractions, and properly propagating errors.
+    pub async fn submit_report(&self, report: &AuditReport) -> Result<(), Box<dyn Error>> {
+        let endpoint = format!("{}/api/v1/audit/reports", self.api_url);
+        
+        let response = self.client.post(&endpoint)
+            .json(report)
+            .send()
+            .await?;
+            
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(format!("Failed to submit report. Status: {}", response.status()).into())
         }
-        
-        // Dummy integration with existing Audit-Guard API
-        self.integrate_with_api(payload)?;
-        
-        Ok(true)
     }
 
-    /// Simulates integration with the existing Audit-Guard API.
-    fn integrate_with_api(&self, _payload: &str) -> Result<(), AuditGuardError> {
-        // Implementation for integrating with existing Audit-Guard API
-        Ok(())
+    /// Fetches a specific audit report
+    pub async fn get_report(&self, id: &str) -> Result<AuditReport, Box<dyn Error>> {
+        let endpoint = format!("{}/api/v1/audit/reports/{}", self.api_url, id);
+        
+        let report: AuditReport = self.client.get(&endpoint)
+            .send()
+            .await?
+            .json()
+            .await?;
+            
+        Ok(report)
     }
-}
-
-/// Initializes the Audit Guard.
-pub fn initialize_audit_guard() -> Result<AuditGuardProtocol, AuditGuardError> {
-    log::info!("Initializing Vero Audit Guard");
-    Ok(AuditGuardProtocol::new(true))
 }
 
 #[cfg(test)]
@@ -64,16 +64,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_audit_guard_initialization() {
-        let guard = initialize_audit_guard().unwrap();
-        assert!(guard.strict_mode);
-        assert_eq!(guard.protocol_version, "1.0.0");
-    }
-
-    #[test]
-    fn test_payload_verification() {
-        let guard = AuditGuardProtocol::new(true);
-        assert!(guard.verify_payload("valid_payload").is_ok());
-        assert!(guard.verify_payload("").is_err());
+    fn test_audit_report_creation() {
+        let report = AuditReport {
+            policy_name: "test-policy".to_string(),
+            compliant: true,
+            violations: vec![],
+        };
+        assert_eq!(report.policy_name, "test-policy");
+        assert!(report.compliant);
     }
 }
