@@ -1,32 +1,62 @@
-//! Vero Audit Guard - Rust Safety Standards Implementation
-
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use std::error::Error;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AuditReport {
-    pub target: String,
-    pub total_files: u32,
-    pub findings: Vec<Finding>,
-    pub report_hash: String,
+    pub policy_name: String,
+    pub compliant: bool,
+    pub violations: Vec<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Finding {
-    pub rule_id: String,
-    pub severity: u8,
-    pub line: u32,
-    pub message: String,
+pub struct AuditGuardClient {
+    client: Client,
+    api_url: String,
 }
 
-/// Integrates with the existing Audit-Guard API by validating policies securely.
-pub fn validate_audit_report(report: &AuditReport) -> bool {
-    // Basic verification: A report must have a valid target and hash.
-    if report.target.is_empty() || report.report_hash.is_empty() {
-        return false;
+impl AuditGuardClient {
+    /// Creates a new AuditGuardClient
+    ///
+    /// # Arguments
+    ///
+    /// * `api_url` - The base URL of the existing Audit-Guard API
+    pub fn new(api_url: &str) -> Self {
+        Self {
+            client: Client::new(),
+            api_url: api_url.to_string(),
+        }
     }
 
-    // Further adherence to Rust safety standards logic...
-    true
+    /// Submits an audit report to the API
+    /// This adheres to Rust safety standards by avoiding raw pointers,
+    /// using safe abstractions, and properly propagating errors.
+    pub async fn submit_report(&self, report: &AuditReport) -> Result<(), Box<dyn Error>> {
+        let endpoint = format!("{}/api/v1/audit/reports", self.api_url);
+        
+        let response = self.client.post(&endpoint)
+            .json(report)
+            .send()
+            .await?;
+            
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(format!("Failed to submit report. Status: {}", response.status()).into())
+        }
+    }
+
+    /// Fetches a specific audit report
+    pub async fn get_report(&self, id: &str) -> Result<AuditReport, Box<dyn Error>> {
+        let endpoint = format!("{}/api/v1/audit/reports/{}", self.api_url, id);
+        
+        let report: AuditReport = self.client.get(&endpoint)
+            .send()
+            .await?
+            .json()
+            .await?;
+            
+        Ok(report)
+    }
 }
 
 #[cfg(test)]
@@ -34,13 +64,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_valid_report() {
+    fn test_audit_report_creation() {
         let report = AuditReport {
-            target: "vero-core-contracts".to_string(),
-            total_files: 10,
-            findings: vec![],
-            report_hash: "abcd1234efgh5678".to_string(),
+            policy_name: "test-policy".to_string(),
+            compliant: true,
+            violations: vec![],
         };
-        assert!(validate_audit_report(&report));
+        assert_eq!(report.policy_name, "test-policy");
+        assert!(report.compliant);
     }
 }
