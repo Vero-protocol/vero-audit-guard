@@ -8,6 +8,10 @@ import { Keypair } from "@stellar/stellar-sdk";
 import * as fs from "fs";
 import * as path from "path";
 import OverflowChecker, { OverflowFinding } from "./overflow-checker";
+import { SECURITY_TIPS, SecurityTip } from "./security-tips";
+import { getNextReportVersion } from "./report-version";
+import { DashboardClient } from "./dashboard-client";
+import { sendAlert } from "./webhook";
 
 
 export interface PRData {
@@ -57,6 +61,9 @@ export interface EvaluationResult {
   warnings_count: number;
   high_severity_violations: PolicyViolation[];
   overflow_findings?: OverflowFinding[];
+  maintenance_alert?: string;
+  anchored_tx?: string;
+  security_tip?: SecurityTip;
 }
 
 /**
@@ -155,7 +162,6 @@ export class PolicyEngine {
       result.overflow_findings = overflowFindings;
       return result;
     }
-    return result;
   }
 
   /**

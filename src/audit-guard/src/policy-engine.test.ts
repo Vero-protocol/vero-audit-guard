@@ -3,6 +3,7 @@
  */
 
 import PolicyEngine, { PRData } from "../src/policy-engine";
+import { Keypair } from "@stellar/stellar-sdk";
 import * as fs from "fs";
 import * as path from "path";
 
