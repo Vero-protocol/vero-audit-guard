@@ -1,48 +1,76 @@
-#![no_std]
+use reqwest::Client;
+use serde::{Deserialize, Serialize};
+use std::error::Error;
 
-use soroban_sdk::{contract, contractimpl, symbol_short, BytesN, Env};
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AuditReport {
+    pub policy_name: String,
+    pub compliant: bool,
+    pub violations: Vec<String>,
+}
 
-#[contract]
-pub struct AuditGuard;
+pub struct AuditGuardClient {
+    client: Client,
+    api_url: String,
+}
 
-#[contractimpl]
-impl AuditGuard {
-    /// Integrates with the existing Audit-Guard API
-    /// Verifies security protocols and system resilience invariants.
-    pub fn verify_security_protocol(env: Env, payload_hash: BytesN<32>) -> bool {
-        // Enforce formal verification checks
-        let event_topic = symbol_short!("audit");
-        env.events().publish((event_topic,), payload_hash);
-        true
+impl AuditGuardClient {
+    /// Creates a new AuditGuardClient
+    ///
+    /// # Arguments
+    ///
+    /// * `api_url` - The base URL of the existing Audit-Guard API
+    pub fn new(api_url: &str) -> Self {
+        Self {
+            client: Client::new(),
+            api_url: api_url.to_string(),
+        }
     }
 
-    /// Formal verification check for security-sensitive code
-    pub fn formal_verification_check(_env: Env, risk_level: u32) -> bool {
-        // Adherence to Rust safety standards (e.g. bounds checking)
-        risk_level < 100
+    /// Submits an audit report to the API
+    /// This adheres to Rust safety standards by avoiding raw pointers,
+    /// using safe abstractions, and properly propagating errors.
+    pub async fn submit_report(&self, report: &AuditReport) -> Result<(), Box<dyn Error>> {
+        let endpoint = format!("{}/api/v1/audit/reports", self.api_url);
+        
+        let response = self.client.post(&endpoint)
+            .json(report)
+            .send()
+            .await?;
+            
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(format!("Failed to submit report. Status: {}", response.status()).into())
+        }
+    }
+
+    /// Fetches a specific audit report
+    pub async fn get_report(&self, id: &str) -> Result<AuditReport, Box<dyn Error>> {
+        let endpoint = format!("{}/api/v1/audit/reports/{}", self.api_url, id);
+        
+        let report: AuditReport = self.client.get(&endpoint)
+            .send()
+            .await?
+            .json()
+            .await?;
+            
+        Ok(report)
     }
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
-    use soroban_sdk::Env;
 
     #[test]
-    fn test_verify_security_protocol() {
-        let env = Env::default();
-        let contract_id = env.register_contract(None, AuditGuard);
-        let client = AuditGuardClient::new(&env, &contract_id);
-        let payload = BytesN::from_array(&env, &[0; 32]);
-        assert_eq!(client.verify_security_protocol(&payload), true);
-    }
-    
-    #[test]
-    fn test_formal_verification() {
-        let env = Env::default();
-        let contract_id = env.register_contract(None, AuditGuard);
-        let client = AuditGuardClient::new(&env, &contract_id);
-        assert_eq!(client.formal_verification_check(&50), true);
-        assert_eq!(client.formal_verification_check(&150), false);
+    fn test_audit_report_creation() {
+        let report = AuditReport {
+            policy_name: "test-policy".to_string(),
+            compliant: true,
+            violations: vec![],
+        };
+        assert_eq!(report.policy_name, "test-policy");
+        assert!(report.compliant);
     }
 }
