@@ -98,7 +98,7 @@ export interface RelayerMetrics {
 }
 
 export interface AnomalyAlert {
-  type: "NONCE_SPIKE" | "FAILED_TX_BURST" | "UNAUTHORIZED_ADDRESS" | "THREAT_FEED_MATCH" | "NONCE_REUSE";
+  type: "NONCE_SPIKE" | "FAILED_TX_BURST" | "UNAUTHORIZED_ADDRESS" | "THREAT_FEED_MATCH" | "NONCE_REUSE" | "NONCE_REGRESSION";
   severity: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
   address: string;
   detail: string;
@@ -150,16 +150,27 @@ function analyze(metrics: RelayerMetrics[]): AnomalyAlert[] {
 
   for (const m of metrics) {
     const prevNonce = previousNonces.get(m.address) ?? m.nonce;
-    // Nonce reuse detection
-    if (previousNonces.has(m.address) && m.nonce <= prevNonce) {
-      detected.push({
-        type: "NONCE_REUSE",
-        severity: "HIGH",
-        address: m.address,
-        detail: `Nonce reuse detected (prev: ${prevNonce}, now: ${m.nonce})`,
-        timestamp: m.timestamp,
-      });
-    }
+    
+  // Nonce anomaly detection: reuse or rollback/regression
+if (previousNonces.has(m.address) && m.nonce === prevNonce) {
+  detected.push({
+    type: "NONCE_REUSE",
+    severity: "HIGH",
+    address: m.address,
+    detail: `Nonce reuse detected (prev: ${prevNonce}, now: ${m.nonce})`,
+    timestamp: m.timestamp,
+  });
+}
+
+if (previousNonces.has(m.address) && m.nonce < prevNonce) {
+  detected.push({
+    type: "NONCE_REGRESSION",
+    severity: "CRITICAL",
+    address: m.address,
+    detail: `Nonce regression detected (prev: ${prevNonce}, now: ${m.nonce})`,
+    timestamp: m.timestamp,
+  });
+}
     const nonceDelta = m.nonce - prevNonce;
     if (nonceDelta > NONCE_SPIKE_THRESHOLD) {
       detected.push({
