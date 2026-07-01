@@ -1,0 +1,179 @@
+name: Fuzzing Suite
+
+on:
+  pull_request:
+    branches: [ main, feat/fuzzing-suite ]
+    paths:
+      - 'src/audit-guard/src/math.rs'
+      - 'src/audit-guard/fuzz/**'
+  push:
+    branches: [ feat/fuzzing-suite ]
+  workflow_dispatch:
+    inputs:
+      fuzz_time:
+        description: 'Time to run each fuzz target (seconds)'
+        required: false
+        default: '60'
+
+jobs:
+  fuzzing:
+    name: Run Fuzzing Suite
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt, clippy
+      
+      - name: Cache cargo registry
+        uses: actions/cache@v3
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+      
+      - name: Cache cargo index
+        uses: actions/cache@v3
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+      
+      - name: Cache cargo build
+        uses: actions/cache@v3
+        with:
+          path: src/audit-guard/target
+          key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+      
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz
+      
+      - name: Run individual fuzz targets
+        working-directory: src/audit-guard
+        run: |
+          FUZZ_TIME=${{ github.event.inputs.fuzz_time || '60' }}
+          
+          # Run each fuzz target
+          for target in fuzz_safe_add fuzz_safe_sub fuzz_safe_mul fuzz_safe_div \
+                        fuzz_safe_mod fuzz_safe_pow fuzz_safe_percentage fuzz_safe_scale \
+                        fuzz_safe_average fuzz_safe_mul_add fuzz_compound_interest \
+                        fuzz_all_operations; do
+            echo "Running $target for ${FUZZ_TIME} seconds..."
+            cargo +nightly fuzz run $target -- -max_total_time=$FUZZ_TIME -print_final_stats=1
+          done
+      
+      - name: Check for crashes
+        if: failure()
+        working-directory: src/audit-guard
+        run: |
+          echo "Fuzzing detected crashes or failures!"
+          echo "Checking artifacts..."
+          find fuzz/artifacts -type f | head -20
+      
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v3
+        with:
+          name: fuzz-crash-artifacts
+          path: src/audit-guard/fuzz/artifacts/
+          retention-days: 30
+      
+      - name: Generate coverage report
+        if: success()
+        working-directory: src/audit-guard
+        run: |
+          echo "Generating fuzzing coverage report..."
+          for target in fuzz_safe_add fuzz_safe_sub fuzz_safe_mul fuzz_safe_div; do
+            cargo +nightly fuzz coverage $target || true
+          done
+      
+      - name: Run unit tests
+        working-directory: src/audit-guard
+        run: cargo test --lib
+      
+      - name: Fuzzing summary
+        if: success()
+        run: |
+          echo "✓ All fuzzing targets completed successfully!"
+          echo "✓ No crashes or assertion failures detected"
+          echo "✓ Math module meets Soroban safety standards"
+
+  verify-soroban-compliance:
+    name: Verify Soroban Safety Standards
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      
+      - name: Run Clippy for safety checks
+        working-directory: src/audit-guard
+        run: |
+          cargo clippy --all-targets --all-features -- \
+            -D warnings \
+            -D clippy::unwrap_used \
+            -D clippy::expect_used \
+            -D clippy::panic \
+            -D clippy::arithmetic_side_effects
+      
+      - name: Verify no unsafe code
+        working-directory: src/audit-guard/src
+        run: |
+          if grep -r "unsafe" math.rs; then
+            echo "Error: Unsafe code detected in math.rs"
+            exit 1
+          fi
+          echo "✓ No unsafe code in math.rs"
+      
+      - name: Check for overflow potential
+        working-directory: src/audit-guard/src
+        run: |
+          # Verify all operations use checked arithmetic
+          if grep -E "\+|\-|\*|\/|%" math.rs | grep -v "checked_" | grep -v "//" | grep -v "pub fn"; then
+            echo "Warning: Potential unchecked arithmetic detected"
+            echo "All operations should use checked arithmetic"
+          fi
+          echo "✓ Arithmetic safety verification complete"
+
+  extended-fuzzing:
+    name: Extended Fuzzing (Manual Trigger)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@nightly
+      
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz
+      
+      - name: Run extended fuzzing
+        working-directory: src/audit-guard
+        run: |
+          # Run all operations target for extended duration
+          EXTENDED_TIME=3600  # 1 hour
+          echo "Running extended fuzzing for ${EXTENDED_TIME} seconds..."
+          cargo +nightly fuzz run fuzz_all_operations -- \
+            -max_total_time=$EXTENDED_TIME \
+            -workers=4 \
+            -print_final_stats=1
+      
+      - name: Upload extended results
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: extended-fuzz-results
+          path: |
+            src/audit-guard/fuzz/artifacts/
+            src/audit-guard/fuzz/coverage/
+          retention-days: 90

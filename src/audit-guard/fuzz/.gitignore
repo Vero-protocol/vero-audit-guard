@@ -1,0 +1,17 @@
+# Ignore fuzz artifacts (crash files, hangs, etc.)
+artifacts/
+
+# Ignore corpus data
+corpus/
+
+# Ignore coverage data
+coverage/
+
+# Ignore build artifacts
+target/
+
+# Keep the structure
+!.gitignore
+!Cargo.toml
+!README.md
+!fuzz_targets/
