@@ -1,0 +1,94 @@
+[package]
+name = "audit-guard-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1.3", features = ["derive"] }
+
+[dependencies.audit-guard]
+path = ".."
+
+# Prevent this from interfering with workspaces
+[workspace]
+members = ["."]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "fuzz_safe_add"
+path = "fuzz_targets/fuzz_safe_add.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_safe_sub"
+path = "fuzz_targets/fuzz_safe_sub.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_safe_mul"
+path = "fuzz_targets/fuzz_safe_mul.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_safe_div"
+path = "fuzz_targets/fuzz_safe_div.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_safe_mod"
+path = "fuzz_targets/fuzz_safe_mod.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_safe_pow"
+path = "fuzz_targets/fuzz_safe_pow.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_safe_percentage"
+path = "fuzz_targets/fuzz_safe_percentage.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_safe_scale"
+path = "fuzz_targets/fuzz_safe_scale.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_safe_average"
+path = "fuzz_targets/fuzz_safe_average.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_safe_mul_add"
+path = "fuzz_targets/fuzz_safe_mul_add.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_compound_interest"
+path = "fuzz_targets/fuzz_compound_interest.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_all_operations"
+path = "fuzz_targets/fuzz_all_operations.rs"
+test = false
+doc = false
