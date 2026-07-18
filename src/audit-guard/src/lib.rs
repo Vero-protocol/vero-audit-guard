@@ -2,6 +2,8 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 
+pub mod hot_reload;
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AuditReport {
     pub policy_name: String,
