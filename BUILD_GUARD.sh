@@ -6,6 +6,7 @@ set -eu
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPORTS_DIR="$ROOT/reports"
 SCANNER_DIR="$ROOT/scanner-engine"
+AUDIT_GUARD_RUST_DIR="$ROOT/src/audit-guard"
 MONITOR_DIR="$ROOT/anomaly-detector"
 TRAIL_DIR="$ROOT/verifiable-audit-trail"
 
@@ -26,6 +27,15 @@ fi
 
 log "Auditing scanner-engine Rust dependencies..."
 cargo audit --deny warnings
+
+log "Running scanner-engine regression tests..."
+cargo test --locked
+
+log "Verifying audit-guard treasury outflow time-lock invariants..."
+cd "$AUDIT_GUARD_RUST_DIR"
+cargo test --locked --lib
+
+cd "$SCANNER_DIR"
 
 cargo build --release 2>&1 | tail -5
 
