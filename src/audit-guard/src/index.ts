@@ -69,3 +69,20 @@ export type {
   WithdrawalResult,
   EmergencyExitOptions,
 } from "./core/emergency-exit";
+
+// Issue VAG-009: Anomaly Alert Dispatcher — Dashboard Channel
+export { default as AnomalyAlertDispatcher } from "./anomaly-alert-dispatcher";
+export type {
+  AnomalyAlertInput,
+  AnomalyAlertDispatcherConfig,
+  AlertSeverity,
+  DispatchResult,
+  DispatchError,
+} from "./anomaly-alert-dispatcher";
+export {
+  DispatcherError,
+  DashboardDeliveryError,
+  AlertValidationError,
+  DispatcherShutdownError,
+  DispatchTimeoutError,
+} from "./anomaly-alert-dispatcher";
