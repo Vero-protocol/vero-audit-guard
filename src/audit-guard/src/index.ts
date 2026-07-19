@@ -45,6 +45,14 @@ export type {
 export { CRYPTO_PATTERNS, CRYPTO_PATTERN_IDS } from "./crypto-patterns";
 export type { CryptoPattern, CryptoDetectionContext } from "./crypto-patterns";
 
+// DoS mitigation: rolling-window request burst detection
+export { default as RateLimitMonitor } from "./rate-limit-monitor";
+export type {
+  RateLimitFinding,
+  RateLimitMonitorOptions,
+  RateLimitResult,
+} from "./rate-limit-monitor";
+
 // Issue #119: Relayer state vs chain state validation
 export { default as RelayerStateValidator } from "./relayer-state-validator";
 export type {
