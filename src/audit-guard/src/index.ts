@@ -56,3 +56,10 @@ export type {
   RelayerValidatorOptions,
   RelayerStateSeverity
 } from "./relayer-state-validator";
+
+export { default as ProtocolFeeOnTransfer, FeeOnTransferError } from "./fee-on-transfer";
+export type {
+  FeeErrorCode,
+  FeeOnTransferConfig,
+  FeeTransferResult,
+} from "./fee-on-transfer";

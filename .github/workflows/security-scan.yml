@@ -46,6 +46,9 @@ jobs:
         run: cargo build --release
         working-directory: scanner-engine
 
+      - name: Verify audit-guard fee-on-transfer logic
+        run: cargo test --manifest-path src/audit-guard/Cargo.toml
+
       - name: Run static analysis
         run: |
           mkdir -p ../reports
@@ -118,6 +121,14 @@ jobs:
 
       - name: Install audit-guard dependencies
         run: npm ci
+        working-directory: src/audit-guard
+
+      - name: Build audit-guard
+        run: npm run build
+        working-directory: src/audit-guard
+
+      - name: Run fee-on-transfer regression coverage
+        run: npm run test:fee-on-transfer:coverage
         working-directory: src/audit-guard
 
       - name: Download scan report
