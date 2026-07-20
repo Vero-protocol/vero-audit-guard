@@ -45,6 +45,30 @@ export type {
 export { CRYPTO_PATTERNS, CRYPTO_PATTERN_IDS } from "./crypto-patterns";
 export type { CryptoPattern, CryptoDetectionContext } from "./crypto-patterns";
 
+// Issue #13: RBAC access control audit
+export { default as RbacMapper } from "./rbac-mapper";
+export type {
+  RbacSeverity,
+  Permission,
+  RbacRole,
+  RbacUser,
+  RbacPolicy,
+  PrivilegeEscalationFinding,
+  LeastPrivilegeViolation,
+  RoleHierarchyNode,
+  RbacScanResult,
+  RbacScanOptions,
+} from "./rbac-mapper";
+
+// Issue #153: Multi-sig treasury governance scanner
+export { default as MultisigTreasuryScanner } from "./multisig-treasury-scanner";
+export type {
+  GovernanceSeverity,
+  GovernanceFinding,
+  MultisigTreasuryScanResult,
+  MultisigScanOptions,
+} from "./multisig-treasury-scanner";
+
 // Issue #119: Relayer state vs chain state validation
 export { default as RelayerStateValidator } from "./relayer-state-validator";
 export type {
