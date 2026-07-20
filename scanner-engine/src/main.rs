@@ -1,3 +1,4 @@
+use audit_guard::{AuditGuardClient, AuditGuardError, AuditReport};
 use rayon::prelude::*;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -153,6 +154,34 @@ fn main() {
         eprintln!("[scanner] CRITICAL findings detected — failing build.");
         std::process::exit(1);
     }
+
+    if let Err(e) = run_audit_guard_verification(&report) {
+        eprintln!("[scanner] Audit guard verification failed: {e}");
+    }
+}
+
+fn run_audit_guard_verification(report: &ScanReport) -> Result<(), AuditGuardError> {
+    let api_url = match env::var("AUDIT_GUARD_API_URL") {
+        Ok(url) if !url.trim().is_empty() => url,
+        _ => return Ok(()),
+    };
+
+    let client = AuditGuardClient::new(&api_url)?;
+
+    let verification = AuditReport {
+        policy_name: format!("scanner-engine/{}", report.target),
+        compliant: !report.findings.iter().any(|f| f.severity == "CRITICAL"),
+        violations: report
+            .findings
+            .iter()
+            .filter(|f| f.severity == "CRITICAL" || f.severity == "HIGH")
+            .map(|f| format!("{}:{}: {}", f.file, f.line, f.rule))
+            .collect(),
+    };
+
+    client.submit_report(&verification)?;
+    eprintln!("[scanner] Audit guard verification submitted.");
+    Ok(())
 }
 
 #[cfg(test)]
