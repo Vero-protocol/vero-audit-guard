@@ -6,14 +6,33 @@
  *   - Unauthorized address interactions
  *   - Threat feed matches
  *   - RPC node health
+ *
+ * VAG-012: Telemetry ingestion is protected by a token-bucket rate limiter and
+ * a bounded drop-oldest queue so that burst traffic cannot exhaust memory or
+ * delay anomaly processing.  This layer is STRICTLY OBSERVATIONAL — it has no
+ * authority to halt, pause, or block on-chain operations.
  */
 import * as fs from "fs";
 import { performance } from "perf_hooks";
 import { sendAlert } from "../../src/audit-guard/src/webhook";
 import * as path from "path";
+import {
+  TelemetryIngestionGuard,
+  TelemetryEvent,
+} from "../../src/audit-guard/src/telemetry-ingestion-guard";
 
 import { ThreatFeedFetcher } from "./audit-guard/threat-feed-fetcher";
 import { RpcFailoverMonitor } from "./rpc-failover-monitor";
+
+// ---------------------------------------------------------------------------
+// VAG-012: module-level ingestion guard — env-configurable, observational only
+// ---------------------------------------------------------------------------
+const metricsIngestionGuard = new TelemetryIngestionGuard({
+  bucketCapacity: Number(process.env["TELEMETRY_BUCKET_CAPACITY"] ?? 200),
+  refillRatePerSecond: Number(process.env["TELEMETRY_REFILL_RATE_PER_SEC"] ?? 100),
+  maxQueueDepth: Number(process.env["TELEMETRY_MAX_QUEUE_DEPTH"] ?? 1000),
+  sourceName: "anomaly-detector",
+});
 
 interface NodeStatus {
   url: string;
@@ -88,6 +107,7 @@ class NodeHealthChecker {
   }
 }
 
+export { metricsIngestionGuard };
 export const threatFetcher = new ThreatFeedFetcher();
 
 export interface RelayerMetrics {
@@ -230,10 +250,46 @@ function emit(alert: AnomalyAlert): void {
 export function resetState(): void {
   previousNonces.clear();
   alerts.length = 0;
+  metricsIngestionGuard._reset();
 }
 
 export async function runOnce(metrics: RelayerMetrics[]): Promise<AnomalyAlert[]> {
-  const found = analyze(metrics);
+  // VAG-012: run each metrics item through the ingestion guard before
+  // processing.  Rate-limited or malformed items are surfaced as alerts and
+  // skipped — this is observational only and does NOT affect on-chain state.
+  const accepted: RelayerMetrics[] = [];
+  let rateLimitedCount = 0;
+  let malformedCount = 0;
+
+  for (const m of metrics) {
+    const event: TelemetryEvent = {
+      id: `${m.address}-${m.timestamp}`,
+      timestamp: new Date(m.timestamp).toISOString(),
+      payload: m,
+    };
+    const result = metricsIngestionGuard.ingest(event);
+    if (result.outcome === "ACCEPTED" || result.outcome === "QUEUE_FULL_DROP") {
+      accepted.push(m);
+    } else if (result.outcome === "RATE_LIMITED") {
+      rateLimitedCount += 1;
+    } else if (result.outcome === "MALFORMED") {
+      malformedCount += 1;
+    }
+  }
+
+  if (rateLimitedCount > 0) {
+    console.warn(
+      `[anomaly-detector][VAG-012] ${rateLimitedCount} metric(s) RATE_LIMITED at ingestion boundary — ` +
+        `tokens_remaining=${metricsIngestionGuard.tokensAvailable} queue=${metricsIngestionGuard.queueDepth}`
+    );
+  }
+  if (malformedCount > 0) {
+    console.error(
+      `[anomaly-detector][VAG-012] ${malformedCount} malformed metric event(s) rejected at ingestion boundary`
+    );
+  }
+
+  const found = analyze(accepted);
   found.forEach(emit);
   return found;
 }
@@ -307,6 +363,8 @@ async function monitor(): Promise<void> {
               timestamp: new Date().toISOString(),
             });
           }
+          // VAG-012: surface rate-limit pressure as a log alert each poll cycle
+          metricsIngestionGuard.logStatus();
         } catch (err) {
           console.error("[anomaly-detector] Fetch error:", (err as Error).message);
         }

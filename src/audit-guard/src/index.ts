@@ -56,3 +56,12 @@ export type {
   RelayerValidatorOptions,
   RelayerStateSeverity
 } from "./relayer-state-validator";
+
+// VAG-012: Telemetry backpressure and rate limiting
+export { default as TelemetryIngestionGuard, defaultIngestionGuard } from "./telemetry-ingestion-guard";
+export type {
+  TelemetryEvent,
+  TelemetryIngestionGuardOptions,
+  IngestionResult,
+  IngestionOutcome,
+} from "./telemetry-ingestion-guard";
