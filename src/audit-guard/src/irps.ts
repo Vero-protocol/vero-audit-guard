@@ -1,4 +1,5 @@
 import { OnCallRoster } from "./oncall-roster";
+import { globalProtocolCircuitBreaker } from "./circuit-breaker";
 
 /**
  * IRP (Incident Response Protocol) utilities for the audit guard.
@@ -44,11 +45,11 @@ export async function escalateIncident(incident: IncidentReport): Promise<void> 
  */
 export async function triggerCircuitBreaker(reason?: string): Promise<void> {
   const msg = reason || "CRITICAL finding — manual intervention required";
+  globalProtocolCircuitBreaker.trip(msg);
   console.log(`[IRP] Circuit breaker triggered: ${msg}`);
 
   const roster = getRoster();
   await roster.pageCurrentOnCall(msg, "CRITICAL", "vero-audit-guard");
 
   console.log("[IRP] Circuit breaker engaged — protocol paused.");
-  return new Promise((resolve) => setTimeout(resolve, 500));
 }

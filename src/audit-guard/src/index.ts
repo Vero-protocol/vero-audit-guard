@@ -56,3 +56,14 @@ export type {
   RelayerValidatorOptions,
   RelayerStateSeverity
 } from "./relayer-state-validator";
+
+export {
+  default as ProtocolCircuitBreaker,
+  CircuitBreakerError,
+  globalProtocolCircuitBreaker,
+} from "./circuit-breaker";
+export type {
+  CircuitBreakerOptions,
+  CircuitBreakerSnapshot,
+  CircuitBreakerState,
+} from "./circuit-breaker";

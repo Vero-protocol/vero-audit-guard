@@ -8,6 +8,8 @@
     "build": "tsc",
     "build:ui": "esbuild src/ui/*.tsx --bundle --minify --outdir=dist/ui --loader:.css=text",
     "test": "jest",
+    "test:circuit-breaker": "jest src/circuit-breaker.test.ts --runInBand",
+    "test:circuit-breaker:coverage": "jest src/circuit-breaker.test.ts --runInBand --coverage --collectCoverageFrom=src/circuit-breaker.ts --coverageThreshold='{\"global\":{\"branches\":80,\"functions\":80,\"lines\":80,\"statements\":80}}'",
     "test:watch": "jest --watch",
     "lint": "eslint src --ext .ts",
     "evaluate": "ts-node src/cli.ts",
