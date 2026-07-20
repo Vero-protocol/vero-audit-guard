@@ -1,3 +1,5 @@
+pub mod telemetry_queue;
+
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -116,12 +118,9 @@ impl AuditGuardClient {
         report.validate()?;
         
         let endpoint = format!("{}/api/v1/audit/reports", self.api_url);
-        
-        let response = self.client.post(&endpoint)
-            .json(report)
-            .send()
-            .await?;
-            
+
+        let response = self.client.post(&endpoint).json(report).send().await?;
+
         if response.status().is_success() {
             Ok(())
         } else {
@@ -137,13 +136,13 @@ impl AuditGuardClient {
         }
         
         let endpoint = format!("{}/api/v1/audit/reports/{}", self.api_url, id);
-        
+
         let report: AuditReport = self.client.get(&endpoint)
             .send()
             .await?
             .json()
             .await?;
-            
+
         report.validate()?;
         Ok(report)
     }
