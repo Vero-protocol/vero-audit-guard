@@ -56,3 +56,12 @@ export type {
   RelayerValidatorOptions,
   RelayerStateSeverity
 } from "./relayer-state-validator";
+
+// Issue #160: Batch contract call processor
+export { default as BatchContractCallProcessor } from "./batch-contract-call-processor";
+export type {
+  ContractCallDescriptor,
+  BatchProcessorOptions,
+  BatchEntryResult,
+  BatchResult,
+} from "./batch-contract-call-processor";
