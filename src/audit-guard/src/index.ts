@@ -56,3 +56,14 @@ export type {
   RelayerValidatorOptions,
   RelayerStateSeverity
 } from "./relayer-state-validator";
+
+export { default as RbacMapper, RbacMapperError } from "./rbac-mapper";
+export type {
+  Permission,
+  RbacRole,
+  RbacUser,
+  RbacPolicy,
+  RbacScanOptions,
+  RbacScanResult,
+  RbacMapperErrorCode,
+} from "./rbac-mapper";
