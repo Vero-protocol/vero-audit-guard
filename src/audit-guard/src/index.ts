@@ -69,3 +69,14 @@ export type {
   WithdrawalResult,
   EmergencyExitOptions,
 } from "./core/emergency-exit";
+
+// Severity Tiering & Alert Escalation Policy
+export { default as SeverityTieringEngine } from "./severity-tiering";
+export type {
+  SeverityTier,
+  EscalationTarget,
+  ConfirmedEvent,
+  DrivenAlertAction,
+  TelemetryRecord,
+  EscalationPolicyOptions,
+} from "./severity-tiering";

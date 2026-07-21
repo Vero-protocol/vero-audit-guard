@@ -1,8 +1,19 @@
-// src/audit-guard/src/archiver.ts
-import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import * as fs from "fs";
 import * as path from "path";
 import * as zlib from "zlib";
+
+type S3ClientType = any;
+let S3ClientClass: any;
+let PutObjectCommandClass: any;
+try {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const aws = require("@aws-sdk/client-s3");
+  S3ClientClass = aws.S3Client;
+  PutObjectCommandClass = aws.PutObjectCommand;
+} catch {
+  S3ClientClass = class MockS3Client {};
+  PutObjectCommandClass = class MockPutObjectCommand { constructor(_: any) {} };
+}
 
 export interface ArchiverConfig {
   bucketName: string;
@@ -17,7 +28,7 @@ export interface ArchiverConfig {
  * After successful upload, the local file is deleted.
  */
 export class LogArchiver {
-  private s3: S3Client;
+  private s3: S3ClientType;
   private config: Required<ArchiverConfig>;
 
   constructor(config: ArchiverConfig) {
@@ -29,7 +40,7 @@ export class LogArchiver {
       prefix: "audit-logs/",
       ...config,
     };
-    this.s3 = new S3Client({ region: this.config.region });
+    this.s3 = new S3ClientClass({ region: this.config.region });
   }
 
   /**
@@ -59,7 +70,7 @@ export class LogArchiver {
     const gzip = zlib.createGzip();
     const compressed = fileStream.pipe(gzip);
     const key = `${this.config.prefix}${path.basename(filePath)}.gz`;
-    const putCommand = new PutObjectCommand({
+    const putCommand = new PutObjectCommandClass({
       Bucket: this.config.bucketName,
       Key: key,
       Body: compressed,

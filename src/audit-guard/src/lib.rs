@@ -2,7 +2,14 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-#[derive(Error, Debug)]
+pub mod severity;
+
+pub use severity::{
+    ConfirmedEvent, DrivenAlertAction, EscalationPolicyConfig, EscalationTarget, SeverityEngine,
+    SeverityTier, TelemetryRecord, TelemetryRecordType,
+};
+
+#[derive(Error, Debug, PartialEq, Eq)]
 pub enum AuditGuardError {
     #[error("API URL cannot be empty")]
     EmptyUrl,
@@ -26,12 +33,33 @@ pub enum AuditGuardError {
     EmptyViolation,
 
     #[error("HTTP client error: {0}")]
-    Http(#[from] reqwest::Error),
+    Http(String),
 
     #[error("API response failed with status {status}")]
     ApiFailure {
-        status: reqwest::StatusCode,
+        status: u16,
     },
+
+    #[error("Event must be confirmed to evaluate severity tiering: event_id={0}")]
+    UnconfirmedEvent(String),
+
+    #[error("Event ID cannot be empty")]
+    EmptyEventId,
+
+    #[error("Invalid event timestamp: {0}")]
+    InvalidTimestamp(i64),
+
+    #[error("Invalid severity tier: {0}")]
+    InvalidSeverityTier(String),
+
+    #[error("Escalation policy configuration error: {0}")]
+    EscalationConfigError(String),
+
+    #[error("Alert dispatch failed: {0}")]
+    AlertDispatchFailure(String),
+
+    #[error("Adversarial payload detected in event: {0}")]
+    AdversarialPayload(String),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -120,12 +148,13 @@ impl AuditGuardClient {
         let response = self.client.post(&endpoint)
             .json(report)
             .send()
-            .await?;
+            .await
+            .map_err(|e| AuditGuardError::Http(e.to_string()))?;
             
         if response.status().is_success() {
             Ok(())
         } else {
-            Err(AuditGuardError::ApiFailure { status: response.status() })
+            Err(AuditGuardError::ApiFailure { status: response.status().as_u16() })
         }
     }
 
@@ -138,11 +167,14 @@ impl AuditGuardClient {
         
         let endpoint = format!("{}/api/v1/audit/reports/{}", self.api_url, id);
         
-        let report: AuditReport = self.client.get(&endpoint)
+        let response = self.client.get(&endpoint)
             .send()
-            .await?
-            .json()
-            .await?;
+            .await
+            .map_err(|e| AuditGuardError::Http(e.to_string()))?;
+            
+        let report: AuditReport = response.json()
+            .await
+            .map_err(|e| AuditGuardError::Http(e.to_string()))?;
             
         report.validate()?;
         Ok(report)
