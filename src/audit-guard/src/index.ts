@@ -56,3 +56,16 @@ export type {
   RelayerValidatorOptions,
   RelayerStateSeverity
 } from "./relayer-state-validator";
+
+// Issue #166: Emergency recovery & exit for vero-core-engine control plane
+export { default as EmergencyExitEngine, buildSignedAuth, canonicalPayload, computeReceiptId, safeAdd, safeSub, DEFAULT_AUTH_WINDOW_MS, U64_MAX } from "./core/emergency-exit";
+export type {
+  EngineStatus,
+  EmergencyCondition,
+  EngineState,
+  EmergencyAuthPayload,
+  SignedEmergencyAuth,
+  EmergencyReceipt,
+  WithdrawalResult,
+  EmergencyExitOptions,
+} from "./core/emergency-exit";
