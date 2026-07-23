@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git checkout *)",
+      "Bash(npm view *)",
+      "Bash(npm install *)",
+      "Bash(cargo --version)",
+      "Bash(cargo metadata *)",
+      "Bash(echo \"EXIT: $?\")",
+      "Bash(cargo build *)",
+      "Bash(tail -100 \"C:\\\\Users\\\\USER\\\\AppData\\\\Local\\\\npm-cache\\\\_logs\\\\2026-07-23T20_09_44_549Z-debug-0.log\" 2>/dev/null | head -150)",
+      "Read(//c/Users/USER/AppData/Local/npm-cache/_logs/**)",
+      "Bash(npm run *)",
+      "Bash(python3 -c \"import yaml,sys; yaml.safe_load\\(open\\('c:/Users/USER/Desktop/vero-audit-guard/.github/workflows/policy-compliance.yml'\\)\\); yaml.safe_load\\(open\\('c:/Users/USER/Desktop/vero-audit-guard/.github/workflows/anchor-on-merge.yml'\\)\\); print\\('OK'\\)\")",
+      "Bash(python -c \"import yaml,sys; yaml.safe_load\\(open\\('c:/Users/USER/Desktop/vero-audit-guard/.github/workflows/policy-compliance.yml'\\)\\); yaml.safe_load\\(open\\('c:/Users/USER/Desktop/vero-audit-guard/.github/workflows/anchor-on-merge.yml'\\)\\); print\\('OK'\\)\")",
+      "Bash(git add *)",
+      "Bash(grep -rn *)"
+    ]
+  }
+}
