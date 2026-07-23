@@ -36,10 +36,12 @@ jobs:
 
       - name: Extract PR data and run policy check
         id: policy-check
+        working-directory: src/audit-guard
         run: |
           node <<'EOF'
           const fs = require('fs');
           const path = require('path');
+          const { Keypair } = require('@stellar/stellar-sdk');
 
           // Extract PR data from GitHub context
           const prData = {
@@ -57,14 +59,37 @@ jobs:
             deletions: parseInt(process.env.DELETIONS),
           };
 
+          // PolicyEngine.evaluate() mandatorily verifies a relayer signature
+          // on all PR data (see verifyRelayerSignature in policy-engine.ts).
+          // Sign here as the official CI relayer so this workflow's own
+          // extraction of PR data can pass that check. Field order below
+          // must match PolicyEngine.getSignaturePayload() exactly, since
+          // signing is over the raw JSON string.
+          const relayerKeypair = Keypair.fromSecret(process.env.CI_RELAYER_SECRET);
+          const timestamp = Date.now();
+          const payload = JSON.stringify({
+            pull_request: prData.pull_request,
+            files_modified: prData.files_modified,
+            additions: prData.additions,
+            deletions: prData.deletions,
+            dependencies_added: undefined,
+            dependencies_updated: undefined,
+            relayer: relayerKeypair.publicKey(),
+            timestamp,
+          });
+          prData.relayer = relayerKeypair.publicKey();
+          prData.signature = relayerKeypair.sign(Buffer.from(payload)).toString('hex');
+          prData.timestamp = timestamp;
+
           // Write PR data to temp file
           fs.writeFileSync('/tmp/pr-data.json', JSON.stringify(prData, null, 2));
-          console.log('✅ PR data extracted and saved');
+          console.log('✅ PR data extracted, signed, and saved');
           EOF
 
         env:
           ANCHOR_ON_CHAIN: "true"
           AUDIT_KEYPAIR_SECRET: ${{ secrets.AUDIT_KEYPAIR_SECRET }}
+          CI_RELAYER_SECRET: ${{ secrets.CI_RELAYER_SECRET }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body }}
           PR_LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
@@ -172,6 +197,7 @@ jobs:
           MAINTENANCE_MESSAGE: ${{ vars.MAINTENANCE_MESSAGE }}
           ANCHOR_ON_CHAIN: "true"
           AUDIT_KEYPAIR_SECRET: ${{ secrets.AUDIT_KEYPAIR_SECRET }}
+          AUTHORIZED_ADDRESSES: ${{ vars.AUTHORIZED_ADDRESSES }}
         working-directory: src/audit-guard
 
       - name: Comment PR with policy result
