@@ -32,6 +32,20 @@ pub enum AuditGuardError {
     ApiFailure {
         status: reqwest::StatusCode,
     },
+
+    // ---- Anomaly dispatch errors (Issue #177) ----
+
+    #[error("Dashboard channel unavailable: {reason}")]
+    DashboardChannelUnavailable { reason: String },
+
+    #[error("Invalid anomaly alert payload: {reason}")]
+    InvalidAnomalyPayload { reason: String },
+
+    #[error("Anomaly dispatch failed after {attempts} attempt(s): {last_error}")]
+    AnomalyDispatchFailed {
+        attempts: u32,
+        last_error: String,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -39,6 +53,56 @@ pub struct AuditReport {
     pub policy_name: String,
     pub compliant: bool,
     pub violations: Vec<String>,
+}
+
+/// Anomaly alert as dispatched to the Guardian Dashboard (Issue #177).
+/// Observational-only — no on-chain halt authority.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AnomalyAlert {
+    /// Alert type identifier (e.g., "NONCE_SPIKE", "FAILED_TX_BURST").
+    pub alert_type: String,
+    /// Severity level.
+    pub severity: AnomalySeverity,
+    /// Affected address, if applicable.
+    pub address: Option<String>,
+    /// Human-readable detail about the anomaly.
+    pub detail: String,
+    /// Unix timestamp in milliseconds.
+    pub timestamp_ms: u64,
+    /// Source service identifier.
+    pub source: Option<String>,
+}
+
+/// Severity levels for anomaly alerts (aligned with Vero security taxonomy).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum AnomalySeverity {
+    Low,
+    Medium,
+    High,
+    Critical,
+}
+
+impl AnomalyAlert {
+    /// Validates the alert payload. Returns Ok(()) if valid.
+    pub fn validate(&self) -> Result<(), AuditGuardError> {
+        if self.alert_type.trim().is_empty() {
+            return Err(AuditGuardError::InvalidAnomalyPayload {
+                reason: "alert_type is empty".to_string(),
+            });
+        }
+        if self.detail.trim().is_empty() {
+            return Err(AuditGuardError::InvalidAnomalyPayload {
+                reason: "detail is empty".to_string(),
+            });
+        }
+        if self.timestamp_ms == 0 {
+            return Err(AuditGuardError::InvalidAnomalyPayload {
+                reason: "timestamp_ms must be positive".to_string(),
+            });
+        }
+        Ok(())
+    }
 }
 
 impl AuditReport {
@@ -147,6 +211,37 @@ impl AuditGuardClient {
         report.validate()?;
         Ok(report)
     }
+
+    /// Dispatches an anomaly alert to the Guardian Dashboard (Issue #177).
+    ///
+    /// This is an observational-only operation — it does not affect on-chain
+    /// state or halt authority. Failures are propagated via the error type
+    /// for the caller to log and handle (e.g., retry or alerting).
+    pub async fn dispatch_anomaly_alert(
+        &self,
+        alert: &AnomalyAlert,
+    ) -> Result<(), AuditGuardError> {
+        validate_url(&self.api_url)?;
+        alert.validate()?;
+
+        let endpoint = format!("{}/api/v1/anomaly/alerts", self.api_url);
+
+        let response = self
+            .client
+            .post(&endpoint)
+            .json(alert)
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            let status = response.status();
+            Err(AuditGuardError::DashboardChannelUnavailable {
+                reason: format!("Dashboard returned HTTP {}", status.as_u16()),
+            })
+        }
+    }
 }
 
 #[cfg(test)]
@@ -239,5 +334,143 @@ mod tests {
             validate_url("ftp://invalid-scheme"),
             Err(AuditGuardError::InvalidUrlFormat(_))
         ));
+    }
+
+    // ---- Anomaly alert tests (Issue #177) ----
+
+    #[test]
+    fn test_anomaly_alert_valid() {
+        let alert = AnomalyAlert {
+            alert_type: "NONCE_SPIKE".to_string(),
+            severity: AnomalySeverity::High,
+            address: Some("GABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789ABCDEFGHIJKL".to_string()),
+            detail: "Nonce jumped by 100".to_string(),
+            timestamp_ms: 1700000000000,
+            source: Some("anomaly-detector".to_string()),
+        };
+        assert!(alert.validate().is_ok());
+    }
+
+    #[test]
+    fn test_anomaly_alert_empty_type() {
+        let alert = AnomalyAlert {
+            alert_type: "".to_string(),
+            severity: AnomalySeverity::High,
+            address: None,
+            detail: "Something happened".to_string(),
+            timestamp_ms: 1700000000000,
+            source: None,
+        };
+        assert!(matches!(
+            alert.validate(),
+            Err(AuditGuardError::InvalidAnomalyPayload { .. })
+        ));
+    }
+
+    #[test]
+    fn test_anomaly_alert_whitespace_type() {
+        let alert = AnomalyAlert {
+            alert_type: "   ".to_string(),
+            severity: AnomalySeverity::Medium,
+            address: None,
+            detail: "Something happened".to_string(),
+            timestamp_ms: 1700000000000,
+            source: None,
+        };
+        assert!(matches!(
+            alert.validate(),
+            Err(AuditGuardError::InvalidAnomalyPayload { .. })
+        ));
+    }
+
+    #[test]
+    fn test_anomaly_alert_empty_detail() {
+        let alert = AnomalyAlert {
+            alert_type: "FAILED_TX_BURST".to_string(),
+            severity: AnomalySeverity::Critical,
+            address: None,
+            detail: "".to_string(),
+            timestamp_ms: 1700000000000,
+            source: None,
+        };
+        assert!(matches!(
+            alert.validate(),
+            Err(AuditGuardError::InvalidAnomalyPayload { .. })
+        ));
+    }
+
+    #[test]
+    fn test_anomaly_alert_zero_timestamp() {
+        let alert = AnomalyAlert {
+            alert_type: "THREAT_FEED_MATCH".to_string(),
+            severity: AnomalySeverity::Critical,
+            address: None,
+            detail: "Blocklisted address".to_string(),
+            timestamp_ms: 0,
+            source: None,
+        };
+        assert!(matches!(
+            alert.validate(),
+            Err(AuditGuardError::InvalidAnomalyPayload { .. })
+        ));
+    }
+
+    #[test]
+    fn test_anomaly_severity_serialization() {
+        let json = serde_json::to_string(&AnomalySeverity::Critical).unwrap();
+        assert_eq!(json, "\"CRITICAL\"");
+        let json = serde_json::to_string(&AnomalySeverity::Low).unwrap();
+        assert_eq!(json, "\"LOW\"");
+    }
+
+    #[test]
+    fn test_anomaly_alert_serialization() {
+        let alert = AnomalyAlert {
+            alert_type: "NONCE_SPIKE".to_string(),
+            severity: AnomalySeverity::High,
+            address: Some("GABC".to_string()),
+            detail: "Spike".to_string(),
+            timestamp_ms: 1700000000000,
+            source: Some("anomaly-detector".to_string()),
+        };
+        let json = serde_json::to_string(&alert).unwrap();
+        let parsed: AnomalyAlert = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.alert_type, "NONCE_SPIKE");
+        assert_eq!(parsed.severity, AnomalySeverity::High);
+        assert_eq!(parsed.detail, "Spike");
+    }
+
+    #[test]
+    fn test_dashboard_channel_unavailable_error_format() {
+        let err = AuditGuardError::DashboardChannelUnavailable {
+            reason: "HTTP 503".to_string(),
+        };
+        assert_eq!(
+            err.to_string(),
+            "Dashboard channel unavailable: HTTP 503"
+        );
+    }
+
+    #[test]
+    fn test_invalid_anomaly_payload_error_format() {
+        let err = AuditGuardError::InvalidAnomalyPayload {
+            reason: "type is missing".to_string(),
+        };
+        assert_eq!(
+            err.to_string(),
+            "Invalid anomaly alert payload: type is missing"
+        );
+    }
+
+    #[test]
+    fn test_anomaly_dispatch_failed_error_format() {
+        let err = AuditGuardError::AnomalyDispatchFailed {
+            attempts: 3,
+            last_error: "timeout".to_string(),
+        };
+        assert_eq!(
+            err.to_string(),
+            "Anomaly dispatch failed after 3 attempt(s): timeout"
+        );
     }
 }

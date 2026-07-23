@@ -98,9 +98,9 @@ export interface RelayerMetrics {
 }
 
 export interface AnomalyAlert {
-  type: "NONCE_SPIKE" | "FAILED_TX_BURST" | "UNAUTHORIZED_ADDRESS" | "THREAT_FEED_MATCH" | "NONCE_REUSE";
+  type: "NONCE_SPIKE" | "FAILED_TX_BURST" | "UNAUTHORIZED_ADDRESS" | "THREAT_FEED_MATCH" | "NONCE_REUSE" | "RELAYER_LATENCY_HIGH";
   severity: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
-  address: string;
+  address?: string;
   detail: string;
   timestamp: number;
 }
@@ -126,6 +126,46 @@ const rpcFailoverMonitor = RPC_NODE_URLS.length > 0
 const DB_PATH = path.join(__dirname, "nonce-db.json");
 const previousNonces = new Map<string, number>(loadNonces());
 const alerts: AnomalyAlert[] = [];
+
+// Dashboard dispatch — lightweight inline bridge to avoid cross-package import issues.
+// The full AnomalyAlertDispatcher lives in src/audit-guard/src/anomaly-alert-dispatcher.ts
+// and is the canonical implementation for the audit-guard module.
+async function dispatchToDashboard(alert: AnomalyAlert): Promise<void> {
+  const dashUrl = process.env.GUARDIAN_DASH_URL;
+  if (!dashUrl) return;
+  const dashToken = process.env.GUARDIAN_DASH_TOKEN ?? "";
+  try {
+    const axios = await import("axios");
+    await axios.default.post(
+      dashUrl,
+      {
+        source: "anomaly-detector",
+        type: alert.type,
+        severity: alert.severity,
+        message: `[${alert.type}] ${alert.address} — ${alert.detail}`,
+        detail: alert.detail,
+        timestamp: new Date(alert.timestamp).toISOString(),
+        metadata: {
+          address: alert.address ?? null,
+          anomalyType: alert.type,
+          originalTimestamp: alert.timestamp,
+        },
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${dashToken}`,
+          "Content-Type": "application/json",
+        },
+        timeout: 5000,
+      }
+    );
+  } catch (err) {
+    console.error(
+      "[anomaly-detector] Dashboard dispatch failed:",
+      (err as Error).message
+    );
+  }
+}
 
 function loadNonces(): [string, number][] {
   try {
@@ -223,6 +263,10 @@ function emit(alert: AnomalyAlert): void {
   alerts.push(alert);
   const line = `[ALERT][${alert.severity}][${alert.type}] ${alert.address} — ${alert.detail}`;
   console.error(line);
+  // Dispatch to Guardian Dashboard (non-blocking, observational-only)
+  dispatchToDashboard(alert).catch((err) => {
+    console.error("[anomaly-detector] Dashboard dispatch failed:", (err as Error).message);
+  });
   // In production: forward to PagerDuty / Slack webhook via env var ALERT_WEBHOOK_URL
 }
 
@@ -305,6 +349,15 @@ async function monitor(): Promise<void> {
               repository: "relayer",
               alert: `Relayer latency high: ${Math.round(duration)}ms`,
               timestamp: new Date().toISOString(),
+            });
+            // Also dispatch to dashboard channel
+            dispatchToDashboard({
+              type: "RELAYER_LATENCY_HIGH",
+              severity: "HIGH",
+              detail: `Relayer latency high: ${Math.round(duration)}ms (threshold: ${thresholdMs}ms)`,
+              timestamp: Date.now(),
+            }).catch((err) => {
+              console.error("[anomaly-detector] Dashboard latency alert dispatch failed:", (err as Error).message);
             });
           }
         } catch (err) {
