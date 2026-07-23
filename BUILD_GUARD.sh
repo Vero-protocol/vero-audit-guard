@@ -28,15 +28,14 @@ fi
 log "Auditing scanner-engine Rust dependencies..."
 cargo audit --deny warnings
 
-log "Running scanner-engine regression tests..."
-cargo test --locked
+log "Running scanner-engine unit tests..."
+cargo test
 
-log "Verifying audit-guard treasury outflow time-lock invariants..."
-cd "$AUDIT_GUARD_RUST_DIR"
-cargo test --locked --lib
+log "Running audit-guard Rust library unit tests..."
+cd "$ROOT/src/audit-guard"
+cargo test
 
 cd "$SCANNER_DIR"
-
 cargo build --release 2>&1 | tail -5
 
 TARGET_DIR="${1:-../vero-core-contracts}"

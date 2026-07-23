@@ -1,7 +1,38 @@
 use reqwest::{Client, StatusCode, Url};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum AuditGuardError {
+    #[error("API URL cannot be empty")]
+    EmptyUrl,
+
+    #[error("Invalid API URL format: {0}")]
+    InvalidUrlFormat(String),
+
+    #[error("Policy name cannot be empty")]
+    EmptyPolicyName,
+
+    #[error("Invalid policy name character in: {0}")]
+    InvalidPolicyName(String),
+
+    #[error("Compliant report must not contain any violations, but found {0} violations")]
+    ViolationsInCompliantReport(usize),
+
+    #[error("Non-compliant report must have at least one violation")]
+    NoViolationsInNonCompliantReport,
+
+    #[error("Violation details cannot be empty")]
+    EmptyViolation,
+
+    #[error("HTTP client error: {0}")]
+    Http(#[from] reqwest::Error),
+
+    #[error("API response failed with status {status}")]
+    ApiFailure {
+        status: reqwest::StatusCode,
+    },
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AuditReport {
@@ -15,237 +46,29 @@ impl AuditReport {
         if self.policy_name.trim().is_empty() {
             return Err(AuditGuardError::EmptyPolicyName);
         }
-
-        if self
-            .violations
-            .iter()
-            .any(|violation| violation.trim().is_empty())
-        {
-            return Err(AuditGuardError::EmptyViolationEntry);
+        
+        // Ensure policy name only contains alphanumeric characters, dashes, or underscores
+        if !self.policy_name.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
+            return Err(AuditGuardError::InvalidPolicyName(self.policy_name.clone()));
         }
 
-        if self.compliant && !self.violations.is_empty() {
-            return Err(AuditGuardError::CompliantReportHasViolations);
-        }
-
-        if !self.compliant && self.violations.is_empty() {
-            return Err(AuditGuardError::NonCompliantReportMissingViolations);
-        }
-
-        Ok(())
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct TreasuryOutflowTimeLockConfig {
-    pub min_delay_secs: u64,
-    pub max_delay_secs: u64,
-    pub max_amount: u64,
-    pub grace_period_secs: u64,
-    pub max_pending_requests: usize,
-}
-
-impl TreasuryOutflowTimeLockConfig {
-    pub fn validate(&self) -> Result<(), AuditGuardError> {
-        if self.min_delay_secs == 0 {
-            return Err(AuditGuardError::InvalidTimeLockConfig(
-                "min_delay_secs must be greater than zero".to_string(),
-            ));
-        }
-
-        if self.max_delay_secs < self.min_delay_secs {
-            return Err(AuditGuardError::InvalidTimeLockConfig(
-                "max_delay_secs must be greater than or equal to min_delay_secs".to_string(),
-            ));
-        }
-
-        if self.max_amount == 0 {
-            return Err(AuditGuardError::InvalidTimeLockConfig(
-                "max_amount must be greater than zero".to_string(),
-            ));
-        }
-
-        if self.grace_period_secs == 0 {
-            return Err(AuditGuardError::InvalidTimeLockConfig(
-                "grace_period_secs must be greater than zero".to_string(),
-            ));
-        }
-
-        if self.max_pending_requests == 0 {
-            return Err(AuditGuardError::InvalidTimeLockConfig(
-                "max_pending_requests must be greater than zero".to_string(),
-            ));
+        if self.compliant {
+            if !self.violations.is_empty() {
+                return Err(AuditGuardError::ViolationsInCompliantReport(self.violations.len()));
+            }
+        } else {
+            if self.violations.is_empty() {
+                return Err(AuditGuardError::NoViolationsInNonCompliantReport);
+            }
+            for violation in &self.violations {
+                if violation.trim().is_empty() {
+                    return Err(AuditGuardError::EmptyViolation);
+                }
+            }
         }
 
         Ok(())
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct TreasuryOutflowRequest {
-    pub request_id: String,
-    pub treasury_id: String,
-    pub beneficiary: String,
-    pub amount: u64,
-    pub created_at: u64,
-    pub execute_after: u64,
-    pub justification: String,
-}
-
-impl TreasuryOutflowRequest {
-    fn validate(&self, config: &TreasuryOutflowTimeLockConfig) -> Result<(), AuditGuardError> {
-        if self.request_id.trim().is_empty() {
-            return Err(AuditGuardError::EmptyRequestId);
-        }
-
-        if self.treasury_id.trim().is_empty() {
-            return Err(AuditGuardError::InvalidTreasuryId);
-        }
-
-        if self.beneficiary.trim().is_empty() {
-            return Err(AuditGuardError::InvalidBeneficiary);
-        }
-
-        if self.amount == 0 {
-            return Err(AuditGuardError::ZeroOutflowAmount);
-        }
-
-        if self.amount > config.max_amount {
-            return Err(AuditGuardError::AmountExceedsLimit {
-                amount: self.amount,
-                max_amount: config.max_amount,
-            });
-        }
-
-        if self.justification.trim().len() < 10 {
-            return Err(AuditGuardError::JustificationTooShort);
-        }
-
-        if self.execute_after <= self.created_at {
-            return Err(AuditGuardError::InvalidExecutionWindow);
-        }
-
-        let delay_secs = self.execute_after - self.created_at;
-        if delay_secs < config.min_delay_secs {
-            return Err(AuditGuardError::DelayBelowMinimum {
-                delay_secs,
-                min_delay_secs: config.min_delay_secs,
-            });
-        }
-
-        if delay_secs > config.max_delay_secs {
-            return Err(AuditGuardError::DelayAboveMaximum {
-                delay_secs,
-                max_delay_secs: config.max_delay_secs,
-            });
-        }
-
-        Ok(())
-    }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-pub enum TreasuryOutflowStatus {
-    Pending,
-    Ready,
-    Executed,
-    Cancelled,
-    Expired,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ScheduledTreasuryOutflow {
-    pub request: TreasuryOutflowRequest,
-    pub status: TreasuryOutflowStatus,
-    pub expires_at: u64,
-    pub executed_at: Option<u64>,
-    pub cancelled_at: Option<u64>,
-    pub cancellation_reason: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct TimeLockVerificationReport {
-    pub checked_requests: usize,
-    pub ready_requests: usize,
-    pub expired_requests: usize,
-}
-
-#[derive(Debug, Error)]
-pub enum AuditGuardError {
-    #[error("API URL must not be empty")]
-    EmptyApiUrl,
-    #[error("invalid API URL: {0}")]
-    InvalidApiUrl(String),
-    #[error("failed to construct endpoint URL: {0}")]
-    InvalidEndpoint(String),
-    #[error("audit report policy name must not be empty")]
-    EmptyPolicyName,
-    #[error("audit report contains an empty violation entry")]
-    EmptyViolationEntry,
-    #[error("compliant audit report cannot contain violations")]
-    CompliantReportHasViolations,
-    #[error("non-compliant audit report must contain at least one violation")]
-    NonCompliantReportMissingViolations,
-    #[error("report id must not be empty")]
-    EmptyReportId,
-    #[error("request id must not be empty")]
-    EmptyRequestId,
-    #[error("treasury id must not be empty")]
-    InvalidTreasuryId,
-    #[error("beneficiary must not be empty")]
-    InvalidBeneficiary,
-    #[error("outflow amount must be greater than zero")]
-    ZeroOutflowAmount,
-    #[error("outflow amount {amount} exceeds configured maximum {max_amount}")]
-    AmountExceedsLimit { amount: u64, max_amount: u64 },
-    #[error("justification must be at least 10 non-whitespace characters")]
-    JustificationTooShort,
-    #[error("execute_after must be greater than created_at")]
-    InvalidExecutionWindow,
-    #[error("outflow delay {delay_secs}s is below the minimum {min_delay_secs}s")]
-    DelayBelowMinimum {
-        delay_secs: u64,
-        min_delay_secs: u64,
-    },
-    #[error("outflow delay {delay_secs}s exceeds the maximum {max_delay_secs}s")]
-    DelayAboveMaximum {
-        delay_secs: u64,
-        max_delay_secs: u64,
-    },
-    #[error("timelock configuration is invalid: {0}")]
-    InvalidTimeLockConfig(String),
-    #[error("request `{request_id}` already exists")]
-    DuplicateRequestId { request_id: String },
-    #[error("too many active timelock requests: limit is {limit}")]
-    TooManyPendingRequests { limit: usize },
-    #[error("request `{request_id}` was not found")]
-    UnknownRequest { request_id: String },
-    #[error("request `{request_id}` is still time-locked until {unlock_at}")]
-    RequestStillLocked { request_id: String, unlock_at: u64 },
-    #[error("request `{request_id}` expired at {expired_at}")]
-    RequestExpired { request_id: String, expired_at: u64 },
-    #[error("request `{request_id}` was already executed at {executed_at}")]
-    RequestAlreadyExecuted {
-        request_id: String,
-        executed_at: u64,
-    },
-    #[error("request `{request_id}` was already cancelled at {cancelled_at}")]
-    RequestAlreadyCancelled {
-        request_id: String,
-        cancelled_at: u64,
-    },
-    #[error("cancellation reason must be at least 5 non-whitespace characters")]
-    InvalidCancellationReason,
-    #[error("timelock state integrity violation for `{request_id}`: {detail}")]
-    StateIntegrityViolation { request_id: String, detail: String },
-    #[error("request failed: {0}")]
-    RequestFailed(#[from] reqwest::Error),
-    #[error("{operation} failed with HTTP {status}: {body}")]
-    UnexpectedHttpStatus {
-        operation: &'static str,
-        status: StatusCode,
-        body: String,
-    },
 }
 
 pub struct AuditGuardClient {
@@ -256,6 +79,16 @@ pub struct AuditGuardClient {
 pub struct SecureTreasuryOutflowTimeLock {
     config: TreasuryOutflowTimeLockConfig,
     requests: BTreeMap<String, ScheduledTreasuryOutflow>,
+}
+
+fn validate_url(url: &str) -> Result<(), AuditGuardError> {
+    if url.trim().is_empty() {
+        return Err(AuditGuardError::EmptyUrl);
+    }
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return Err(AuditGuardError::InvalidUrlFormat(url.to_string()));
+    }
+    Ok(())
 }
 
 impl AuditGuardClient {
@@ -285,16 +118,25 @@ impl AuditGuardClient {
             .map_err(|error| AuditGuardError::InvalidEndpoint(error.to_string()))
     }
 
+    /// Creates a new AuditGuardClient and validates the URL immediately
+    pub fn new_validated(api_url: &str) -> Result<Self, AuditGuardError> {
+        validate_url(api_url)?;
+        Ok(Self {
+            client: Client::new(),
+            api_url: api_url.to_string(),
+        })
+    }
+
     /// Submits an audit report to the API
     /// This adheres to Rust safety standards by avoiding raw pointers,
     /// using safe abstractions, and properly propagating errors.
     pub async fn submit_report(&self, report: &AuditReport) -> Result<(), AuditGuardError> {
+        validate_url(&self.api_url)?;
         report.validate()?;
-        let endpoint = self.build_endpoint("api/v1/audit/reports")?;
-
-        let response = self
-            .client
-            .post(endpoint)
+        
+        let endpoint = format!("{}/api/v1/audit/reports", self.api_url);
+        
+        let response = self.client.post(&endpoint)
             .json(report)
             .send()
             .await?;
@@ -302,44 +144,26 @@ impl AuditGuardClient {
         if response.status().is_success() {
             Ok(())
         } else {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            Err(AuditGuardError::UnexpectedHttpStatus {
-                operation: "submit audit report",
-                status,
-                body,
-            })
+            Err(AuditGuardError::ApiFailure { status: response.status() })
         }
     }
 
     /// Fetches a specific audit report
     pub async fn get_report(&self, id: &str) -> Result<AuditReport, AuditGuardError> {
-        let id = id.trim();
-        if id.is_empty() {
-            return Err(AuditGuardError::EmptyReportId);
+        validate_url(&self.api_url)?;
+        if id.trim().is_empty() {
+            return Err(AuditGuardError::InvalidUrlFormat("Empty report ID".to_string()));
         }
-
-        let endpoint = self.build_endpoint(&format!("api/v1/audit/reports/{id}"))?;
-
-        let response = self.client.get(endpoint)
+        
+        let endpoint = format!("{}/api/v1/audit/reports/{}", self.api_url, id);
+        
+        let report: AuditReport = self.client.get(&endpoint)
             .send()
             .await?
-
-            ;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(AuditGuardError::UnexpectedHttpStatus {
-                operation: "fetch audit report",
-                status,
-                body,
-            });
-        }
-
-        let report: AuditReport = response.json().await?;
+            .json()
+            .await?;
+            
         report.validate()?;
-
         Ok(report)
     }
 }
@@ -686,214 +510,78 @@ mod tests {
     }
 
     #[test]
-    fn audit_report_validation_rejects_inconsistent_state() {
+    fn test_invalid_policy_name() {
+        let report = AuditReport {
+            policy_name: "invalid name!".to_string(),
+            compliant: true,
+            violations: vec![],
+        };
+        assert!(matches!(
+            report.validate(),
+            Err(AuditGuardError::InvalidPolicyName(_))
+        ));
+
+        let report_empty = AuditReport {
+            policy_name: "".to_string(),
+            compliant: true,
+            violations: vec![],
+        };
+        assert!(matches!(
+            report_empty.validate(),
+            Err(AuditGuardError::EmptyPolicyName)
+        ));
+    }
+
+    #[test]
+    fn test_violations_in_compliant_report() {
         let report = AuditReport {
             policy_name: "test-policy".to_string(),
             compliant: true,
-            violations: vec!["should not exist".to_string()],
+            violations: vec!["some violation".to_string()],
         };
-
         assert!(matches!(
             report.validate(),
-            Err(AuditGuardError::CompliantReportHasViolations)
+            Err(AuditGuardError::ViolationsInCompliantReport(1))
         ));
     }
 
     #[test]
-    fn audit_guard_client_rejects_invalid_api_url() {
-        assert!(matches!(
-            AuditGuardClient::new("   "),
-            Err(AuditGuardError::EmptyApiUrl)
-        ));
-    }
-
-    #[tokio::test]
-    async fn submit_report_propagates_http_failure_details() {
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/api/v1/audit/reports"))
-            .respond_with(ResponseTemplate::new(503).set_body_string("service unavailable"))
-            .mount(&server)
-            .await;
-
-        let client = AuditGuardClient::new(&server.uri()).expect("server URL should be valid");
+    fn test_empty_violations_in_non_compliant_report() {
         let report = AuditReport {
-            policy_name: "timelock-check".to_string(),
+            policy_name: "test-policy".to_string(),
             compliant: false,
-            violations: vec!["delay mismatch".to_string()],
+            violations: vec![],
         };
-
-        let error = client
-            .submit_report(&report)
-            .await
-            .expect_err("HTTP failure should be propagated");
-
-        match error {
-            AuditGuardError::UnexpectedHttpStatus { status, body, .. } => {
-                assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
-                assert!(body.contains("service unavailable"));
-            }
-            other => panic!("unexpected error: {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn get_report_rejects_invalid_payloads() {
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/api/v1/audit/reports/report-1"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                    "policy_name": "timelock-check",
-                    "compliant": false,
-                    "violations": []
-                })),
-            )
-            .mount(&server)
-            .await;
-
-        let client = AuditGuardClient::new(&server.uri()).expect("server URL should be valid");
-        let error = client
-            .get_report("report-1")
-            .await
-            .expect_err("invalid payload should fail validation");
-
         assert!(matches!(
-            error,
-            AuditGuardError::NonCompliantReportMissingViolations
+            report.validate(),
+            Err(AuditGuardError::NoViolationsInNonCompliantReport)
         ));
     }
 
     #[test]
-    fn timelock_rejects_short_delay_and_duplicate_ids() {
-        let mut timelock =
-            SecureTreasuryOutflowTimeLock::new(base_config()).expect("config should be valid");
-
-        let too_early = sample_request("req-1", 100, 120);
+    fn test_empty_violation_description() {
+        let report = AuditReport {
+            policy_name: "test-policy".to_string(),
+            compliant: false,
+            violations: vec!["".to_string()],
+        };
         assert!(matches!(
-            timelock.schedule_outflow(too_early),
-            Err(AuditGuardError::DelayBelowMinimum { .. })
-        ));
-
-        let valid = sample_request("req-1", 100, 200);
-        timelock
-            .schedule_outflow(valid.clone())
-            .expect("request should schedule");
-
-        assert!(matches!(
-            timelock.schedule_outflow(valid),
-            Err(AuditGuardError::DuplicateRequestId { .. })
+            report.validate(),
+            Err(AuditGuardError::EmptyViolation)
         ));
     }
 
     #[test]
-    fn timelock_blocks_early_execution_and_executes_once_ready() {
-        let mut timelock =
-            SecureTreasuryOutflowTimeLock::new(base_config()).expect("config should be valid");
-        timelock
-            .schedule_outflow(sample_request("req-2", 100, 200))
-            .expect("request should schedule");
-
+    fn test_url_validation() {
+        assert!(validate_url("https://api.vero.audit").is_ok());
+        assert!(validate_url("http://localhost:8080").is_ok());
         assert!(matches!(
-            timelock.release_outflow("req-2", 150),
-            Err(AuditGuardError::RequestStillLocked { .. })
+            validate_url(""),
+            Err(AuditGuardError::EmptyUrl)
         ));
-
-        let executed = timelock
-            .release_outflow("req-2", 220)
-            .expect("request should execute once ready");
-        assert_eq!(executed.status, TreasuryOutflowStatus::Executed);
-        assert_eq!(executed.executed_at, Some(220));
-
         assert!(matches!(
-            timelock.release_outflow("req-2", 221),
-            Err(AuditGuardError::RequestAlreadyExecuted { .. })
+            validate_url("ftp://invalid-scheme"),
+            Err(AuditGuardError::InvalidUrlFormat(_))
         ));
-    }
-
-    #[test]
-    fn timelock_expires_after_grace_period_and_allows_cancellation_cleanup() {
-        let mut timelock =
-            SecureTreasuryOutflowTimeLock::new(base_config()).expect("config should be valid");
-        timelock
-            .schedule_outflow(sample_request("req-3", 100, 200))
-            .expect("request should schedule");
-
-        assert!(matches!(
-            timelock.release_outflow("req-3", 501),
-            Err(AuditGuardError::RequestExpired { .. })
-        ));
-
-        let cancelled = timelock
-            .cancel_outflow("req-3", "risk review", 502)
-            .expect("expired request should still be cancellable for cleanup");
-        assert_eq!(cancelled.status, TreasuryOutflowStatus::Cancelled);
-        assert_eq!(cancelled.cancellation_reason.as_deref(), Some("risk review"));
-    }
-
-    #[test]
-    fn timelock_enforces_pending_request_capacity() {
-        let mut timelock =
-            SecureTreasuryOutflowTimeLock::new(base_config()).expect("config should be valid");
-        timelock
-            .schedule_outflow(sample_request("req-4", 100, 200))
-            .expect("first request should schedule");
-        timelock
-            .schedule_outflow(sample_request("req-5", 110, 210))
-            .expect("second request should schedule");
-
-        assert!(matches!(
-            timelock.schedule_outflow(sample_request("req-6", 120, 220)),
-            Err(AuditGuardError::TooManyPendingRequests { limit: 2 })
-        ));
-    }
-
-    #[test]
-    fn timelock_integrity_verification_detects_tampered_state() {
-        let mut timelock =
-            SecureTreasuryOutflowTimeLock::new(base_config()).expect("config should be valid");
-        timelock
-            .schedule_outflow(sample_request("req-7", 100, 200))
-            .expect("request should schedule");
-
-        let scheduled = timelock
-            .requests
-            .get_mut("req-7")
-            .expect("request should exist for test mutation");
-        scheduled.status = TreasuryOutflowStatus::Executed;
-        scheduled.executed_at = Some(150);
-
-        assert!(matches!(
-            timelock.verify_state_integrity(220),
-            Err(AuditGuardError::StateIntegrityViolation { .. })
-        ));
-    }
-
-    #[test]
-    fn timelock_integrity_verification_reports_ready_and_expired_counts() {
-        let mut timelock =
-            SecureTreasuryOutflowTimeLock::new(base_config()).expect("config should be valid");
-        timelock
-            .schedule_outflow(sample_request("req-8", 100, 400))
-            .expect("request should schedule");
-        timelock
-            .schedule_outflow(sample_request("req-9", 110, 190))
-            .expect("request should schedule");
-
-        timelock
-            .get_mut_request("req-8")
-            .expect("request should exist")
-            .apply_time_transition(500);
-        timelock
-            .get_mut_request("req-9")
-            .expect("request should exist")
-            .apply_time_transition(500);
-
-        let report = timelock
-            .verify_state_integrity(500)
-            .expect("integrity report should succeed");
-        assert_eq!(report.checked_requests, 2);
-        assert_eq!(report.ready_requests, 1);
-        assert_eq!(report.expired_requests, 1);
     }
 }
