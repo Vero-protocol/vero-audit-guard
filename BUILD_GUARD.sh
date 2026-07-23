@@ -27,6 +27,14 @@ fi
 log "Auditing scanner-engine Rust dependencies..."
 cargo audit --deny warnings
 
+log "Running scanner-engine unit tests..."
+cargo test
+
+log "Running audit-guard Rust library unit tests..."
+cd "$ROOT/src/audit-guard"
+cargo test
+
+cd "$SCANNER_DIR"
 cargo build --release 2>&1 | tail -5
 
 TARGET_DIR="${1:-../vero-core-contracts}"

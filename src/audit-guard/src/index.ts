@@ -57,11 +57,15 @@ export type {
   RelayerStateSeverity
 } from "./relayer-state-validator";
 
-// VAG-012: Telemetry backpressure and rate limiting
-export { default as TelemetryIngestionGuard, defaultIngestionGuard } from "./telemetry-ingestion-guard";
+// Issue #166: Emergency recovery & exit for vero-core-engine control plane
+export { default as EmergencyExitEngine, buildSignedAuth, canonicalPayload, computeReceiptId, safeAdd, safeSub, DEFAULT_AUTH_WINDOW_MS, U64_MAX } from "./core/emergency-exit";
 export type {
-  TelemetryEvent,
-  TelemetryIngestionGuardOptions,
-  IngestionResult,
-  IngestionOutcome,
-} from "./telemetry-ingestion-guard";
+  EngineStatus,
+  EmergencyCondition,
+  EngineState,
+  EmergencyAuthPayload,
+  SignedEmergencyAuth,
+  EmergencyReceipt,
+  WithdrawalResult,
+  EmergencyExitOptions,
+} from "./core/emergency-exit";
