@@ -478,13 +478,14 @@ version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "139c4cf31c8b5f33d7e199446eff9c1e02decfc2f0eec2c8d71f65befa45b421"
 dependencies = [
- "displaydoc",
- "icu_locale_core",
- "writeable",
- "yoke",
- "zerofrom",
- "zerotrie",
- "zerovec",
+ "crossbeam-epoch",
+ "hex",
+ "rayon",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "walkdir",
 ]
 
 [[package]]
