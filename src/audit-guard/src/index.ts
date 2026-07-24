@@ -45,29 +45,13 @@ export type {
 export { CRYPTO_PATTERNS, CRYPTO_PATTERN_IDS } from "./crypto-patterns";
 export type { CryptoPattern, CryptoDetectionContext } from "./crypto-patterns";
 
-// Issue #13: RBAC access control audit
-export { default as RbacMapper } from "./rbac-mapper";
+// DoS mitigation: rolling-window request burst detection
+export { default as RateLimitMonitor } from "./rate-limit-monitor";
 export type {
-  RbacSeverity,
-  Permission,
-  RbacRole,
-  RbacUser,
-  RbacPolicy,
-  PrivilegeEscalationFinding,
-  LeastPrivilegeViolation,
-  RoleHierarchyNode,
-  RbacScanResult,
-  RbacScanOptions,
-} from "./rbac-mapper";
-
-// Issue #153: Multi-sig treasury governance scanner
-export { default as MultisigTreasuryScanner } from "./multisig-treasury-scanner";
-export type {
-  GovernanceSeverity,
-  GovernanceFinding,
-  MultisigTreasuryScanResult,
-  MultisigScanOptions,
-} from "./multisig-treasury-scanner";
+  RateLimitFinding,
+  RateLimitMonitorOptions,
+  RateLimitResult,
+} from "./rate-limit-monitor";
 
 // Issue #119: Relayer state vs chain state validation
 export { default as RelayerStateValidator } from "./relayer-state-validator";
@@ -93,3 +77,20 @@ export type {
   WithdrawalResult,
   EmergencyExitOptions,
 } from "./core/emergency-exit";
+
+// Issue VAG-009: Anomaly Alert Dispatcher — Dashboard Channel
+export { default as AnomalyAlertDispatcher } from "./anomaly-alert-dispatcher";
+export type {
+  AnomalyAlertInput,
+  AnomalyAlertDispatcherConfig,
+  AlertSeverity,
+  DispatchResult,
+  DispatchError,
+} from "./anomaly-alert-dispatcher";
+export {
+  DispatcherError,
+  DashboardDeliveryError,
+  AlertValidationError,
+  DispatcherShutdownError,
+  DispatchTimeoutError,
+} from "./anomaly-alert-dispatcher";
