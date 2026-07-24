@@ -6,6 +6,7 @@ set -eu
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPORTS_DIR="$ROOT/reports"
 SCANNER_DIR="$ROOT/scanner-engine"
+AUDIT_GUARD_RUST_DIR="$ROOT/src/audit-guard"
 MONITOR_DIR="$ROOT/anomaly-detector"
 TRAIL_DIR="$ROOT/verifiable-audit-trail"
 
