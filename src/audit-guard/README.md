@@ -54,6 +54,55 @@ Ensures PRs meet minimum quality and documentation standards:
 | `TOO_MANY_FILES_MODIFIED` | MEDIUM | >20 files should be split into smaller PRs |
 | `LARGE_DIFF_REQUIRES_JUSTIFICATION` | MEDIUM | >1000 line changes need justification |
 
+## Policy Bundle Signature Verification (Issue #171 / VAG-003)
+
+PR review reduces — but does not eliminate — the risk that a **compromised CI
+runner** silently pushes an unauthorized change to the Rego policy bundle the
+engine evaluates against. Bundle signature verification is a second, independent
+control: the bundle is described by a deterministic manifest (each `.rego` file
+plus its SHA-256) that a trusted maintainer signs **offline**. Before evaluation,
+the engine recomputes the manifest from disk and verifies it against the signed
+one. A runner can edit a policy file and the committed manifest, but it cannot
+forge the signature without the maintainer's secret key.
+
+This control is **observational / telemetry-only** — it holds no on-chain halt
+authority. When a bundle fails verification, failures surface as high/critical
+**warnings** (forwarded to the Guardian Dashboard as alerts by
+`reportToDashboard`), never a silent drop. Enforcement is opt-in: it activates
+only when `POLICY_BUNDLE_SIGNATURE` and `POLICY_BUNDLE_SIGNERS` are configured.
+
+| Rule (telemetry code) | Severity | Description |
+|-----------------------|----------|-------------|
+| `POLICY_BUNDLE_TAMPERED` | CRITICAL | On-disk bundle drifted from the signed manifest (file added/removed/modified) |
+| `POLICY_BUNDLE_SIGNATURE_INVALID` | CRITICAL | Signature did not verify against any trusted signer |
+| `POLICY_BUNDLE_MANIFEST_MISSING` / `_MALFORMED` | HIGH | Signed manifest absent or structurally invalid |
+| `POLICY_BUNDLE_SIGNATURE_MISSING` / `_MALFORMED` | HIGH | Detached signature absent or not valid hex |
+| `POLICY_BUNDLE_NO_TRUSTED_SIGNERS` | HIGH | No trusted signer keys configured |
+
+### Configuration
+
+| Environment Variable | Description |
+|----------------------|-------------|
+| `POLICY_BUNDLE_SIGNATURE` | Detached hex Ed25519 signature over the canonical signed manifest |
+| `POLICY_BUNDLE_SIGNERS` | Comma-separated trusted signer public keys (Stellar `G...` addresses) |
+| `POLICY_BUNDLE_SIGNING_SECRET` | Maintainer Stellar secret (`S...`) — used **only** by the offline signing CLI, never in CI |
+
+### Maintainer workflow
+
+```bash
+# 1. After an intentional policy change, regenerate the committed manifest:
+npm run policy-bundle -- regenerate      # writes policies/bundle.manifest.json
+
+# 2. On a trusted machine, produce a detached signature:
+POLICY_BUNDLE_SIGNING_SECRET=S... npm run policy-bundle -- sign
+#    → prints signer_public_key and POLICY_BUNDLE_SIGNATURE
+
+# 3. Configure POLICY_BUNDLE_SIGNATURE (secret) and POLICY_BUNDLE_SIGNERS (var)
+#    in CI. The pipeline then verifies the bundle on every run:
+POLICY_BUNDLE_SIGNATURE=... POLICY_BUNDLE_SIGNERS=G... \
+  npm run policy-bundle -- verify
+```
+
 ## Immutable Audit Trail
 
 `audit-guard` supports anchoring audit results to the Stellar ledger for immutability and anti-tampering.

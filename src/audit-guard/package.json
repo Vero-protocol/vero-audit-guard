@@ -14,6 +14,7 @@
     "check-pr": "ts-node src/cli.ts pr",
     "scan-events": "ts-node src/cli.ts scan-events",
     "security-gate": "ts-node src/security-gate-cli.ts",
+    "policy-bundle": "ts-node src/policy-bundle-cli.ts",
     "backup": "ts-node src/backup.ts backup",
     "restore": "ts-node src/backup.ts restore"
   },

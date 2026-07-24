@@ -12,6 +12,10 @@ import { SECURITY_TIPS, SecurityTip } from "./security-tips";
 import { getNextReportVersion } from "./report-version";
 import { DashboardClient } from "./dashboard-client";
 import { sendAlert } from "./webhook";
+import {
+  PolicyBundleVerifier,
+  PolicyBundleErrorCode,
+} from "./policy-bundle-verifier";
 
 
 export interface PRData {
@@ -149,18 +153,60 @@ export class PolicyEngine {
     if (!this.opaAvailable) {
       const result = await this.evaluateWithoutOPA(enrichedPrData);
       result.overflow_findings = overflowFindings;
+      this.applyPolicyBundleVerification(result);
       return result;
     }
 
     try {
       const result = await this.evaluateWithOPA(enrichedPrData);
       result.overflow_findings = overflowFindings;
+      this.applyPolicyBundleVerification(result);
       return result;
     } catch (error) {
       console.error("[PolicyEngine] OPA evaluation failed:", error);
       const result = await this.evaluateWithoutOPA(enrichedPrData);
       result.overflow_findings = overflowFindings;
+      this.applyPolicyBundleVerification(result);
       return result;
+    }
+  }
+
+  /**
+   * Second, independent control against a compromised CI runner tampering with
+   * the Rego policy bundle (Issue #171 / VAG-003). When bundle signing is
+   * configured (POLICY_BUNDLE_SIGNATURE + POLICY_BUNDLE_SIGNERS), verify the
+   * on-disk bundle against a manifest signed offline by a trusted maintainer
+   * key. Observational-only: failures are surfaced as high/critical WARNINGS
+   * (which reportToDashboard() forwards as alerts) — they never silently drop,
+   * but this control holds no on-chain halt authority.
+   */
+  private applyPolicyBundleVerification(result: EvaluationResult): void {
+    const verifier = new PolicyBundleVerifier({ policiesDir: this.policiesDir });
+    if (!verifier.isConfigured()) {
+      return; // Enforcement not enabled for this repo/environment.
+    }
+
+    const verification = verifier.verify();
+    if (verification.verified) {
+      return;
+    }
+
+    for (const err of verification.errors) {
+      const critical =
+        err.code === PolicyBundleErrorCode.BundleTampered ||
+        err.code === PolicyBundleErrorCode.SignatureInvalid ||
+        err.code === PolicyBundleErrorCode.UntrustedSigner;
+      result.warnings.push({
+        rule: err.code,
+        severity: critical ? "CRITICAL" : "HIGH",
+        message: `⚠️  Policy bundle signature verification failed: ${err.message}`,
+        detail: err.detail || err.message,
+      });
+    }
+
+    result.warnings_count = result.warnings.length;
+    if (result.status === "COMPLIANT") {
+      result.status = "WARNING";
     }
   }
 
