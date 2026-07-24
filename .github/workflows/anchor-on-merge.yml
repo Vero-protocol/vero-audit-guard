@@ -82,6 +82,7 @@ jobs:
         run: |
           node <<'EOF'
           const fs = require('fs');
+          const { Keypair } = require('@stellar/stellar-sdk');
           const PolicyEngine = require('./dist/policy-engine').default;
           const AuditTrail = require('./dist/audit-trail').default;
 
@@ -110,6 +111,26 @@ jobs:
               }
             }
           }
+
+          // PolicyEngine.evaluate() mandatorily verifies a relayer signature
+          // (see verifyRelayerSignature in policy-engine.ts). Sign here as
+          // the same official CI relayer used by policy-compliance.yml.
+          // Field order below must match PolicyEngine.getSignaturePayload().
+          const relayerKeypair = Keypair.fromSecret(process.env.CI_RELAYER_SECRET);
+          const timestamp = Date.now();
+          const payload = JSON.stringify({
+            pull_request: prData.pull_request,
+            files_modified: prData.files_modified,
+            additions: prData.additions,
+            deletions: prData.deletions,
+            dependencies_added: undefined,
+            dependencies_updated: undefined,
+            relayer: relayerKeypair.publicKey(),
+            timestamp,
+          });
+          prData.relayer = relayerKeypair.publicKey();
+          prData.signature = relayerKeypair.sign(Buffer.from(payload)).toString('hex');
+          prData.timestamp = timestamp;
 
           const engine = new PolicyEngine();
           (async () => {
@@ -142,6 +163,11 @@ jobs:
           PR_BASE: ${{ steps.find-pr.outputs.base }}
           PR_HEAD: ${{ steps.find-pr.outputs.head }}
           CHANGED_FILES: ${{ steps.changed-files.outputs.files }}
+          # CI_RELAYER_SECRET only attests "this data came from an official
+          # CI run" — it has no on-chain value and is also used (as a repo
+          # secret) by policy-compliance.yml on pull_request events.
+          CI_RELAYER_SECRET: ${{ secrets.CI_RELAYER_SECRET }}
+          AUTHORIZED_ADDRESSES: ${{ vars.AUTHORIZED_ADDRESSES }}
           # AUDIT_KEYPAIR_SECRET is intentionally scoped as an ENVIRONMENT
           # secret on `production-anchor`, not a repo secret, so no other
           # workflow or job can read it.
