@@ -172,7 +172,6 @@ jobs:
           MAINTENANCE_MESSAGE: ${{ vars.MAINTENANCE_MESSAGE }}
           ANCHOR_ON_CHAIN: "true"
           AUDIT_KEYPAIR_SECRET: ${{ secrets.AUDIT_KEYPAIR_SECRET }}
-        working-directory: src/audit-guard
 
       - name: Comment PR with policy result
         if: always()
