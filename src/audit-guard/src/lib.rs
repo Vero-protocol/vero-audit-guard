@@ -2,6 +2,11 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+pub mod zk_state_validator;
+pub use zk_state_validator::{
+    compute_commitment, StateTransitionProof, ZkStateError, ZkStateValidationHook,
+};
+
 #[derive(Error, Debug)]
 pub enum AuditGuardError {
     #[error("API URL cannot be empty")]
