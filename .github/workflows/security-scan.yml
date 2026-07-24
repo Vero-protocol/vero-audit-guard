@@ -30,7 +30,8 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             scanner-engine/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('scanner-engine/Cargo.lock') }}
+            src/audit-guard/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('scanner-engine/Cargo.lock', 'src/audit-guard/Cargo.lock') }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -41,6 +42,14 @@ jobs:
       - name: Audit Rust dependencies for known vulnerabilities
         run: cargo audit --deny warnings
         working-directory: scanner-engine
+
+      - name: Run scanner-engine regression tests
+        run: cargo test --locked
+        working-directory: scanner-engine
+
+      - name: Verify audit-guard treasury outflow time-lock invariants
+        run: cargo test --locked --lib
+        working-directory: src/audit-guard
 
       - name: Build scanner-engine
         run: cargo build --release

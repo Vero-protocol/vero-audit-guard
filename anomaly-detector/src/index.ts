@@ -6,14 +6,33 @@
  *   - Unauthorized address interactions
  *   - Threat feed matches
  *   - RPC node health
+ *
+ * VAG-012: Telemetry ingestion is protected by a token-bucket rate limiter and
+ * a bounded drop-oldest queue so that burst traffic cannot exhaust memory or
+ * delay anomaly processing.  This layer is STRICTLY OBSERVATIONAL — it has no
+ * authority to halt, pause, or block on-chain operations.
  */
 import * as fs from "fs";
 import { performance } from "perf_hooks";
 import { sendAlert } from "../../src/audit-guard/src/webhook";
 import * as path from "path";
+import {
+  TelemetryIngestionGuard,
+  TelemetryEvent,
+} from "../../src/audit-guard/src/telemetry-ingestion-guard";
 
 import { ThreatFeedFetcher } from "./audit-guard/threat-feed-fetcher";
 import { RpcFailoverMonitor } from "./rpc-failover-monitor";
+
+// ---------------------------------------------------------------------------
+// VAG-012: module-level ingestion guard — env-configurable, observational only
+// ---------------------------------------------------------------------------
+const metricsIngestionGuard = new TelemetryIngestionGuard({
+  bucketCapacity: Number(process.env["TELEMETRY_BUCKET_CAPACITY"] ?? 200),
+  refillRatePerSecond: Number(process.env["TELEMETRY_REFILL_RATE_PER_SEC"] ?? 100),
+  maxQueueDepth: Number(process.env["TELEMETRY_MAX_QUEUE_DEPTH"] ?? 1000),
+  sourceName: "anomaly-detector",
+});
 
 interface NodeStatus {
   url: string;
@@ -88,6 +107,7 @@ class NodeHealthChecker {
   }
 }
 
+export { metricsIngestionGuard };
 export const threatFetcher = new ThreatFeedFetcher();
 
 export interface RelayerMetrics {
@@ -98,9 +118,9 @@ export interface RelayerMetrics {
 }
 
 export interface AnomalyAlert {
-  type: "NONCE_SPIKE" | "FAILED_TX_BURST" | "UNAUTHORIZED_ADDRESS" | "THREAT_FEED_MATCH" | "NONCE_REUSE";
+  type: "NONCE_SPIKE" | "FAILED_TX_BURST" | "UNAUTHORIZED_ADDRESS" | "THREAT_FEED_MATCH" | "NONCE_REUSE" | "RELAYER_LATENCY_HIGH";
   severity: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
-  address: string;
+  address?: string;
   detail: string;
   timestamp: number;
 }
@@ -126,6 +146,46 @@ const rpcFailoverMonitor = RPC_NODE_URLS.length > 0
 const DB_PATH = path.join(__dirname, "nonce-db.json");
 const previousNonces = new Map<string, number>(loadNonces());
 const alerts: AnomalyAlert[] = [];
+
+// Dashboard dispatch — lightweight inline bridge to avoid cross-package import issues.
+// The full AnomalyAlertDispatcher lives in src/audit-guard/src/anomaly-alert-dispatcher.ts
+// and is the canonical implementation for the audit-guard module.
+async function dispatchToDashboard(alert: AnomalyAlert): Promise<void> {
+  const dashUrl = process.env.GUARDIAN_DASH_URL;
+  if (!dashUrl) return;
+  const dashToken = process.env.GUARDIAN_DASH_TOKEN ?? "";
+  try {
+    const axios = await import("axios");
+    await axios.default.post(
+      dashUrl,
+      {
+        source: "anomaly-detector",
+        type: alert.type,
+        severity: alert.severity,
+        message: `[${alert.type}] ${alert.address} — ${alert.detail}`,
+        detail: alert.detail,
+        timestamp: new Date(alert.timestamp).toISOString(),
+        metadata: {
+          address: alert.address ?? null,
+          anomalyType: alert.type,
+          originalTimestamp: alert.timestamp,
+        },
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${dashToken}`,
+          "Content-Type": "application/json",
+        },
+        timeout: 5000,
+      }
+    );
+  } catch (err) {
+    console.error(
+      "[anomaly-detector] Dashboard dispatch failed:",
+      (err as Error).message
+    );
+  }
+}
 
 function loadNonces(): [string, number][] {
   try {
@@ -223,6 +283,10 @@ function emit(alert: AnomalyAlert): void {
   alerts.push(alert);
   const line = `[ALERT][${alert.severity}][${alert.type}] ${alert.address} — ${alert.detail}`;
   console.error(line);
+  // Dispatch to Guardian Dashboard (non-blocking, observational-only)
+  dispatchToDashboard(alert).catch((err) => {
+    console.error("[anomaly-detector] Dashboard dispatch failed:", (err as Error).message);
+  });
   // In production: forward to PagerDuty / Slack webhook via env var ALERT_WEBHOOK_URL
 }
 
@@ -230,10 +294,46 @@ function emit(alert: AnomalyAlert): void {
 export function resetState(): void {
   previousNonces.clear();
   alerts.length = 0;
+  metricsIngestionGuard._reset();
 }
 
 export async function runOnce(metrics: RelayerMetrics[]): Promise<AnomalyAlert[]> {
-  const found = analyze(metrics);
+  // VAG-012: run each metrics item through the ingestion guard before
+  // processing.  Rate-limited or malformed items are surfaced as alerts and
+  // skipped — this is observational only and does NOT affect on-chain state.
+  const accepted: RelayerMetrics[] = [];
+  let rateLimitedCount = 0;
+  let malformedCount = 0;
+
+  for (const m of metrics) {
+    const event: TelemetryEvent = {
+      id: `${m.address}-${m.timestamp}`,
+      timestamp: new Date(m.timestamp).toISOString(),
+      payload: m,
+    };
+    const result = metricsIngestionGuard.ingest(event);
+    if (result.outcome === "ACCEPTED" || result.outcome === "QUEUE_FULL_DROP") {
+      accepted.push(m);
+    } else if (result.outcome === "RATE_LIMITED") {
+      rateLimitedCount += 1;
+    } else if (result.outcome === "MALFORMED") {
+      malformedCount += 1;
+    }
+  }
+
+  if (rateLimitedCount > 0) {
+    console.warn(
+      `[anomaly-detector][VAG-012] ${rateLimitedCount} metric(s) RATE_LIMITED at ingestion boundary — ` +
+        `tokens_remaining=${metricsIngestionGuard.tokensAvailable} queue=${metricsIngestionGuard.queueDepth}`
+    );
+  }
+  if (malformedCount > 0) {
+    console.error(
+      `[anomaly-detector][VAG-012] ${malformedCount} malformed metric event(s) rejected at ingestion boundary`
+    );
+  }
+
+  const found = analyze(accepted);
   found.forEach(emit);
   return found;
 }
@@ -306,7 +406,18 @@ async function monitor(): Promise<void> {
               alert: `Relayer latency high: ${Math.round(duration)}ms`,
               timestamp: new Date().toISOString(),
             });
+            // Also dispatch to dashboard channel
+            dispatchToDashboard({
+              type: "RELAYER_LATENCY_HIGH",
+              severity: "HIGH",
+              detail: `Relayer latency high: ${Math.round(duration)}ms (threshold: ${thresholdMs}ms)`,
+              timestamp: Date.now(),
+            }).catch((err) => {
+              console.error("[anomaly-detector] Dashboard latency alert dispatch failed:", (err as Error).message);
+            });
           }
+          // VAG-012: surface rate-limit pressure as a log alert each poll cycle
+          metricsIngestionGuard.logStatus();
         } catch (err) {
           console.error("[anomaly-detector] Fetch error:", (err as Error).message);
         }
