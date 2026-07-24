@@ -87,6 +87,8 @@ jobs:
           EOF
 
         env:
+          ANCHOR_ON_CHAIN: "true"
+          AUDIT_KEYPAIR_SECRET: ${{ secrets.AUDIT_KEYPAIR_SECRET }}
           CI_RELAYER_SECRET: ${{ secrets.CI_RELAYER_SECRET }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body }}
@@ -186,7 +188,8 @@ jobs:
           GUARDIAN_DASH_TOKEN: ${{ secrets.GUARDIAN_DASH_TOKEN }}
           MAINTENANCE_MODE: ${{ vars.MAINTENANCE_MODE }}
           MAINTENANCE_MESSAGE: ${{ vars.MAINTENANCE_MESSAGE }}
-          AUTHORIZED_ADDRESSES: ${{ vars.AUTHORIZED_ADDRESSES }}
+          ANCHOR_ON_CHAIN: "true"
+          AUDIT_KEYPAIR_SECRET: ${{ secrets.AUDIT_KEYPAIR_SECRET }}
 
       - name: Comment PR with policy result
         if: always()
