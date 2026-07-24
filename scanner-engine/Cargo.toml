@@ -1,20 +1,21 @@
-edge_all_open_tabs = [
-  {
-    "pageTitle": "Resolve Conflicts · Pull Request #196 · Vero-protocol/vero-audit-guard",
-    "pageUrl": "https://github.com/Vero-protocol/vero-audit-guard/pull/196/conflicts",
-    "tabId": 2111178120,
-    "isCurrent": true
-  },
-  {
-    "pageTitle": "Unify the three overlapping contract repository implementations behind one interface · Issue #633 · Talenttrust/Talenttrust-Backend",
-    "pageUrl": "https://github.com/Talenttrust/Talenttrust-Backend/issues/633",
-    "tabId": 2111178110,
-    "isCurrent": false
-  },
-  {
-    "pageTitle": "GrantFox Contributor",
-    "pageUrl": "https://contribute.grantfox.xyz/my-applications",
-    "tabId": 2111178117,
-    "isCurrent": false
-  }
-]
+[package]
+name = "vero-scanner-engine"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+sha2 = "0.10"
+hex = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+walkdir = "2"
+regex = "1"
+rayon = "1"
+
+# RUSTSEC-2026-0204: pin crossbeam-epoch away from vulnerable 0.9.18;
+# rayon pulls this in transitively via rayon-core -> crossbeam-deque.
+crossbeam-epoch = "0.9.20"
+
+[[bin]]
+name = "scanner"
+path = "src/main.rs"
