@@ -1,0 +1,200 @@
+name: Anchor Confirmed Audit Record
+
+# Runs only after a PR is merged into main — never on pull_request events.
+# This is the ONLY workflow permitted to hold AUDIT_KEYPAIR_SECRET, and it
+# only ever runs against already-reviewed, already-merged code.
+#
+# Manual prerequisite (cannot be expressed in YAML): create the
+# `production-anchor` environment in repo Settings > Environments, add
+# required reviewers, and move AUDIT_KEYPAIR_SECRET from a repo-level
+# secret to an environment secret scoped to `production-anchor` only, so
+# no other workflow can read it. Until that's configured, this job will
+# run unattended on every merge to main.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  statuses: write
+
+jobs:
+  anchor:
+    name: Anchor Audit Record On-Chain
+    runs-on: ubuntu-latest
+    environment: production-anchor
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: src/audit-guard/package-lock.json
+
+      - name: Install audit-guard dependencies
+        run: npm ci
+        working-directory: src/audit-guard
+
+      - name: Build policy engine
+        run: npm run build
+        working-directory: src/audit-guard
+
+      - name: Find merged PR for this commit
+        id: find-pr
+        run: |
+          RESPONSE=$(curl -s \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/${{ github.repository }}/commits/${{ github.sha }}/pulls")
+
+          PR_NUMBER=$(echo "$RESPONSE" | jq -r '.[0].number // empty')
+          PR_TITLE=$(echo "$RESPONSE" | jq -r '.[0].title // empty')
+          PR_AUTHOR=$(echo "$RESPONSE" | jq -r '.[0].user.login // empty')
+          PR_LABELS=$(echo "$RESPONSE" | jq -c '[.[0].labels[]?.name] // []')
+          PR_BASE=$(echo "$RESPONSE" | jq -r '.[0].base.ref // "main"')
+          PR_HEAD=$(echo "$RESPONSE" | jq -r '.[0].head.ref // empty')
+
+          {
+            echo "number=$PR_NUMBER"
+            echo "title=$PR_TITLE"
+            echo "author=$PR_AUTHOR"
+            echo "labels=$PR_LABELS"
+            echo "base=$PR_BASE"
+            echo "head=$PR_HEAD"
+          } >> "$GITHUB_OUTPUT"
+
+          # Body may contain newlines; write separately for the next step
+          echo "$RESPONSE" | jq -r '.[0].body // ""' > /tmp/pr-body.txt
+
+      - name: Get files changed in the merge commit
+        id: changed-files
+        run: |
+          FILES=$(curl -s \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/${{ github.repository }}/commits/${{ github.sha }}" \
+            | jq -r '.files[].filename' | jq -R -s -c 'split("\n")[:-1]')
+          echo "files=$FILES" >> "$GITHUB_OUTPUT"
+
+      - name: Evaluate and anchor confirmed record
+        id: anchor
+        run: |
+          node <<'EOF'
+          const fs = require('fs');
+          const { Keypair } = require('@stellar/stellar-sdk');
+          const PolicyEngine = require('./dist/policy-engine').default;
+          const AuditTrail = require('./dist/audit-trail').default;
+
+          const prData = {
+            pull_request: {
+              title: process.env.PR_TITLE || '(direct push to main)',
+              body: fs.existsSync('/tmp/pr-body.txt') ? fs.readFileSync('/tmp/pr-body.txt', 'utf-8') : '',
+              labels: JSON.parse(process.env.PR_LABELS || '[]'),
+              base_branch: process.env.PR_BASE || 'main',
+              head_branch: process.env.PR_HEAD || '',
+              number: process.env.PR_NUMBER ? parseInt(process.env.PR_NUMBER) : null,
+              author: process.env.PR_AUTHOR || '',
+            },
+            files_modified: JSON.parse(process.env.CHANGED_FILES || '[]'),
+            additions: 0,
+            deletions: 0,
+            file_contents: {},
+          };
+
+          for (const file of prData.files_modified) {
+            if (file && fs.existsSync(file)) {
+              try {
+                prData.file_contents[file] = fs.readFileSync(file, 'utf-8');
+              } catch (e) {
+                console.warn(`Warning: Could not read file ${file}`);
+              }
+            }
+          }
+
+          // PolicyEngine.evaluate() mandatorily verifies a relayer signature
+          // (see verifyRelayerSignature in policy-engine.ts). Sign here as
+          // the same official CI relayer used by policy-compliance.yml.
+          // Field order below must match PolicyEngine.getSignaturePayload().
+          const relayerKeypair = Keypair.fromSecret(process.env.CI_RELAYER_SECRET);
+          const timestamp = Date.now();
+          const payload = JSON.stringify({
+            pull_request: prData.pull_request,
+            files_modified: prData.files_modified,
+            additions: prData.additions,
+            deletions: prData.deletions,
+            dependencies_added: undefined,
+            dependencies_updated: undefined,
+            relayer: relayerKeypair.publicKey(),
+            timestamp,
+          });
+          prData.relayer = relayerKeypair.publicKey();
+          prData.signature = relayerKeypair.sign(Buffer.from(payload)).toString('hex');
+          prData.timestamp = timestamp;
+
+          const engine = new PolicyEngine();
+          (async () => {
+            const result = await engine.evaluate(prData);
+
+            console.log('Anchoring confirmed audit report on-chain...');
+            const trail = new AuditTrail();
+            const txHash = await trail.anchor(result);
+            console.log(`Audit report anchored. Stellar TX: ${txHash}`);
+            result.anchored_tx = txHash;
+
+            fs.writeFileSync('/tmp/anchor-result.json', JSON.stringify(result, null, 2));
+
+            const githubOutput = process.env.GITHUB_OUTPUT;
+            if (githubOutput) {
+              fs.appendFileSync(githubOutput, `tx_hash=${txHash}\n`);
+              fs.appendFileSync(githubOutput, `status=${result.status}\n`);
+            }
+          })().catch(e => {
+            console.error('Anchoring failed:', e);
+            process.exit(1);
+          });
+          EOF
+        working-directory: src/audit-guard
+        env:
+          PR_NUMBER: ${{ steps.find-pr.outputs.number }}
+          PR_TITLE: ${{ steps.find-pr.outputs.title }}
+          PR_AUTHOR: ${{ steps.find-pr.outputs.author }}
+          PR_LABELS: ${{ steps.find-pr.outputs.labels }}
+          PR_BASE: ${{ steps.find-pr.outputs.base }}
+          PR_HEAD: ${{ steps.find-pr.outputs.head }}
+          CHANGED_FILES: ${{ steps.changed-files.outputs.files }}
+          # CI_RELAYER_SECRET only attests "this data came from an official
+          # CI run" — it has no on-chain value and is also used (as a repo
+          # secret) by policy-compliance.yml on pull_request events.
+          CI_RELAYER_SECRET: ${{ secrets.CI_RELAYER_SECRET }}
+          AUTHORIZED_ADDRESSES: ${{ vars.AUTHORIZED_ADDRESSES }}
+          # AUDIT_KEYPAIR_SECRET is intentionally scoped as an ENVIRONMENT
+          # secret on `production-anchor`, not a repo secret, so no other
+          # workflow or job can read it.
+          AUDIT_KEYPAIR_SECRET: ${{ secrets.AUDIT_KEYPAIR_SECRET }}
+
+      - name: Set commit status with anchor result
+        if: always()
+        continue-on-error: true
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let state = 'failure';
+            let description = 'Anchoring failed or was skipped.';
+
+            if (fs.existsSync('/tmp/anchor-result.json')) {
+              const result = JSON.parse(fs.readFileSync('/tmp/anchor-result.json', 'utf-8'));
+              state = 'success';
+              description = `Anchored. TX: ${result.anchored_tx}`;
+            }
+
+            github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.sha,
+              state,
+              description,
+              context: 'Audit Trail Anchor',
+              target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
+            });
