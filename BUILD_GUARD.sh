@@ -6,6 +6,7 @@ set -eu
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPORTS_DIR="$ROOT/reports"
 SCANNER_DIR="$ROOT/scanner-engine"
+AUDIT_GUARD_RUST_DIR="$ROOT/src/audit-guard"
 MONITOR_DIR="$ROOT/anomaly-detector"
 TRAIL_DIR="$ROOT/verifiable-audit-trail"
 
@@ -27,6 +28,14 @@ fi
 log "Auditing scanner-engine Rust dependencies..."
 cargo audit --deny warnings
 
+log "Running scanner-engine unit tests..."
+cargo test
+
+log "Running audit-guard Rust library unit tests..."
+cd "$ROOT/src/audit-guard"
+cargo test
+
+cd "$SCANNER_DIR"
 cargo build --release 2>&1 | tail -5
 
 TARGET_DIR="${1:-../vero-core-contracts}"

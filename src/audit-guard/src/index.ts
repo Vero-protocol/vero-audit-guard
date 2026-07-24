@@ -45,6 +45,14 @@ export type {
 export { CRYPTO_PATTERNS, CRYPTO_PATTERN_IDS } from "./crypto-patterns";
 export type { CryptoPattern, CryptoDetectionContext } from "./crypto-patterns";
 
+// DoS mitigation: rolling-window request burst detection
+export { default as RateLimitMonitor } from "./rate-limit-monitor";
+export type {
+  RateLimitFinding,
+  RateLimitMonitorOptions,
+  RateLimitResult,
+} from "./rate-limit-monitor";
+
 // Issue #119: Relayer state vs chain state validation
 export { default as RelayerStateValidator } from "./relayer-state-validator";
 export type {
@@ -57,13 +65,32 @@ export type {
   RelayerStateSeverity
 } from "./relayer-state-validator";
 
-export {
-  default as ProtocolCircuitBreaker,
-  CircuitBreakerError,
-  globalProtocolCircuitBreaker,
-} from "./circuit-breaker";
+// Issue #166: Emergency recovery & exit for vero-core-engine control plane
+export { default as EmergencyExitEngine, buildSignedAuth, canonicalPayload, computeReceiptId, safeAdd, safeSub, DEFAULT_AUTH_WINDOW_MS, U64_MAX } from "./core/emergency-exit";
 export type {
-  CircuitBreakerOptions,
-  CircuitBreakerSnapshot,
-  CircuitBreakerState,
-} from "./circuit-breaker";
+  EngineStatus,
+  EmergencyCondition,
+  EngineState,
+  EmergencyAuthPayload,
+  SignedEmergencyAuth,
+  EmergencyReceipt,
+  WithdrawalResult,
+  EmergencyExitOptions,
+} from "./core/emergency-exit";
+
+// Issue VAG-009: Anomaly Alert Dispatcher — Dashboard Channel
+export { default as AnomalyAlertDispatcher } from "./anomaly-alert-dispatcher";
+export type {
+  AnomalyAlertInput,
+  AnomalyAlertDispatcherConfig,
+  AlertSeverity,
+  DispatchResult,
+  DispatchError,
+} from "./anomaly-alert-dispatcher";
+export {
+  DispatcherError,
+  DashboardDeliveryError,
+  AlertValidationError,
+  DispatcherShutdownError,
+  DispatchTimeoutError,
+} from "./anomaly-alert-dispatcher";
