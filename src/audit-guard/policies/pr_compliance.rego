@@ -63,8 +63,10 @@ deny[msg] {
     }
 }
 
-# Rule: Security-sensitive changes must have security label or detailed justification
-deny[msg] {
+# Rule: Security-sensitive changes should have security label or detailed justification
+# Advisory warning only — matches the TypeScript fallback evaluator in policy-engine.ts
+# which also treats this as a warning, not a blocking violation.
+warning[msg] {
     sensitive_keywords := ["auth", "crypto", "signature", "key", "secret", "token", "vulnerability", "exploit"]
     any_sensitive := [keyword | keyword := sensitive_keywords[_]; contains(lower(input.pull_request.body), keyword)]
     count(any_sensitive) > 0
