@@ -78,6 +78,24 @@ export type {
   EmergencyExitOptions,
 } from "./core/emergency-exit";
 
+// Issue VAG-010: Admin Multi-Sig Webhook Notification Channel
+export { default as MultisigWebhookNotifier, computeHmacSignature } from "./multisig-webhook-notifier";
+export type {
+  CriticalAnomalyInput,
+  WebhookNotifyResult,
+  EndpointDeliveryResult,
+  MultisigWebhookNotifierConfig,
+  WebhookDeliveryError,
+} from "./multisig-webhook-notifier";
+export {
+  WebhookNotificationError,
+  WebhookConfigurationError,
+  WebhookPayloadSerializationError,
+  WebhookNon2xxResponseError,
+  WebhookTimeoutError,
+  WebhookNetworkError,
+} from "./multisig-webhook-notifier";
+
 // Issue VAG-009: Anomaly Alert Dispatcher — Dashboard Channel
 export { default as AnomalyAlertDispatcher } from "./anomaly-alert-dispatcher";
 export type {
