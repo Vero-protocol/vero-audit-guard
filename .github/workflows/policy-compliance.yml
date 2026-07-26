@@ -65,21 +65,39 @@ jobs:
           // extraction of PR data can pass that check. Field order below
           // must match PolicyEngine.getSignaturePayload() exactly, since
           // signing is over the raw JSON string.
-          const relayerKeypair = Keypair.fromSecret(process.env.CI_RELAYER_SECRET);
-          const timestamp = Date.now();
-          const payload = JSON.stringify({
-            pull_request: prData.pull_request,
-            files_modified: prData.files_modified,
-            additions: prData.additions,
-            deletions: prData.deletions,
-            dependencies_added: undefined,
-            dependencies_updated: undefined,
-            relayer: relayerKeypair.publicKey(),
-            timestamp,
-          });
-          prData.relayer = relayerKeypair.publicKey();
-          prData.signature = relayerKeypair.sign(Buffer.from(payload)).toString('hex');
-          prData.timestamp = timestamp;
+          //
+          // Guard: if CI_RELAYER_SECRET is absent the workflow must not
+          // crash mid-script (which would leave /tmp/pr-data.json and
+          // /tmp/policy-result.json unwritten and break all downstream
+          // steps). Instead, omit the signature fields so PolicyEngine
+          // surfaces RELAYER_SIGNATURE_MISSING as a policy violation
+          // rather than an unhandled exception.
+          const ciRelayerSecret = process.env.CI_RELAYER_SECRET;
+          if (ciRelayerSecret && ciRelayerSecret.trim()) {
+            try {
+              const relayerKeypair = Keypair.fromSecret(ciRelayerSecret.trim());
+              const timestamp = Date.now();
+              const payload = JSON.stringify({
+                pull_request: prData.pull_request,
+                files_modified: prData.files_modified,
+                additions: prData.additions,
+                deletions: prData.deletions,
+                dependencies_added: undefined,
+                dependencies_updated: undefined,
+                relayer: relayerKeypair.publicKey(),
+                timestamp,
+              });
+              prData.relayer = relayerKeypair.publicKey();
+              prData.signature = relayerKeypair.sign(Buffer.from(payload)).toString('hex');
+              prData.timestamp = timestamp;
+            } catch (keypairErr) {
+              console.error('⚠️  CI_RELAYER_SECRET is set but invalid:', keypairErr.message);
+              console.error('Continuing without signature — PolicyEngine will surface RELAYER_SIGNATURE_MISSING.');
+            }
+          } else {
+            console.error('⚠️  CI_RELAYER_SECRET is not configured. Set this secret in repo Settings → Secrets.');
+            console.error('Continuing without signature — PolicyEngine will surface RELAYER_SIGNATURE_MISSING.');
+          }
 
           // Write PR data to temp file
           fs.writeFileSync('/tmp/pr-data.json', JSON.stringify(prData, null, 2));
