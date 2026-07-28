@@ -1,5 +1,10 @@
+pub mod policy_bundle;
+pub mod telemetry_queue;
+pub mod write_path;
+
 use reqwest::{Client, StatusCode, Url};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -29,12 +34,15 @@ pub enum AuditGuardError {
     Http(#[from] reqwest::Error),
 
     #[error("API response failed with status {status}")]
-    ApiFailure {
-        status: reqwest::StatusCode,
-    },
+    ApiFailure { status: StatusCode },
+
+    #[error("API URL cannot be empty")]
+    EmptyApiUrl,
+
+    #[error("Invalid API URL: {0}")]
+    InvalidApiUrl(String),
 
     // ---- Anomaly dispatch errors (Issue #177) ----
-
     #[error("Dashboard channel unavailable: {reason}")]
     DashboardChannelUnavailable { reason: String },
 
@@ -42,10 +50,47 @@ pub enum AuditGuardError {
     InvalidAnomalyPayload { reason: String },
 
     #[error("Anomaly dispatch failed after {attempts} attempt(s): {last_error}")]
-    AnomalyDispatchFailed {
-        attempts: u32,
-        last_error: String,
+    AnomalyDispatchFailed { attempts: u32, last_error: String },
+
+    // ---- Treasury outflow time-lock errors (Issue #185) ----
+    #[error("Time-lock configuration is invalid: {reason}")]
+    InvalidTimeLockConfig { reason: String },
+
+    #[error("Treasury outflow request `{request_id}` is invalid: {reason}")]
+    InvalidOutflowRequest { request_id: String, reason: String },
+
+    #[error("Treasury outflow request `{request_id}` already exists")]
+    DuplicateRequestId { request_id: String },
+
+    #[error("Too many pending treasury outflow requests (limit {limit})")]
+    TooManyPendingRequests { limit: usize },
+
+    #[error("Unknown treasury outflow request `{request_id}`")]
+    UnknownRequest { request_id: String },
+
+    #[error("Treasury outflow request `{request_id}` is still locked until {unlock_at}")]
+    RequestStillLocked { request_id: String, unlock_at: u64 },
+
+    #[error("Treasury outflow request `{request_id}` was already executed at {executed_at}")]
+    RequestAlreadyExecuted {
+        request_id: String,
+        executed_at: u64,
     },
+
+    #[error("Treasury outflow request `{request_id}` was already cancelled at {cancelled_at}")]
+    RequestAlreadyCancelled {
+        request_id: String,
+        cancelled_at: u64,
+    },
+
+    #[error("Treasury outflow request `{request_id}` expired at {expired_at}")]
+    RequestExpired { request_id: String, expired_at: u64 },
+
+    #[error("Cancellation reason must be at least 5 characters")]
+    InvalidCancellationReason,
+
+    #[error("State integrity violation on request `{request_id}`: {detail}")]
+    StateIntegrityViolation { request_id: String, detail: String },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -110,15 +155,21 @@ impl AuditReport {
         if self.policy_name.trim().is_empty() {
             return Err(AuditGuardError::EmptyPolicyName);
         }
-        
+
         // Ensure policy name only contains alphanumeric characters, dashes, or underscores
-        if !self.policy_name.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
+        if !self
+            .policy_name
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+        {
             return Err(AuditGuardError::InvalidPolicyName(self.policy_name.clone()));
         }
 
         if self.compliant {
             if !self.violations.is_empty() {
-                return Err(AuditGuardError::ViolationsInCompliantReport(self.violations.len()));
+                return Err(AuditGuardError::ViolationsInCompliantReport(
+                    self.violations.len(),
+                ));
             }
         } else {
             if self.violations.is_empty() {
@@ -135,9 +186,130 @@ impl AuditReport {
     }
 }
 
+/// Bounds every scheduled outflow must satisfy before it is accepted.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TreasuryOutflowTimeLockConfig {
+    /// Shortest delay between scheduling and execution.
+    pub min_delay_secs: u64,
+    /// Longest delay between scheduling and execution.
+    pub max_delay_secs: u64,
+    /// Largest amount a single request may move.
+    pub max_amount: u64,
+    /// Window after `execute_after` during which a ready request stays executable.
+    pub grace_period_secs: u64,
+    /// Cap on simultaneously active (pending or ready) requests.
+    pub max_pending_requests: usize,
+}
+
+impl TreasuryOutflowTimeLockConfig {
+    pub fn validate(&self) -> Result<(), AuditGuardError> {
+        let reason = if self.min_delay_secs == 0 {
+            "min_delay_secs must be positive"
+        } else if self.max_delay_secs < self.min_delay_secs {
+            "max_delay_secs must be greater than or equal to min_delay_secs"
+        } else if self.max_amount == 0 {
+            "max_amount must be positive"
+        } else if self.grace_period_secs == 0 {
+            "grace_period_secs must be positive"
+        } else if self.max_pending_requests == 0 {
+            "max_pending_requests must be positive"
+        } else {
+            return Ok(());
+        };
+
+        Err(AuditGuardError::InvalidTimeLockConfig {
+            reason: reason.to_string(),
+        })
+    }
+}
+
+/// A treasury outflow awaiting the time-lock delay.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TreasuryOutflowRequest {
+    pub request_id: String,
+    pub treasury_id: String,
+    pub beneficiary: String,
+    pub amount: u64,
+    /// Unix timestamp at which the request was created.
+    pub created_at: u64,
+    /// Unix timestamp before which the request must not execute.
+    pub execute_after: u64,
+    pub justification: String,
+}
+
+impl TreasuryOutflowRequest {
+    pub fn validate(&self, config: &TreasuryOutflowTimeLockConfig) -> Result<(), AuditGuardError> {
+        let delay = self.execute_after.checked_sub(self.created_at);
+
+        let reason = if self.request_id.trim().is_empty() {
+            "request_id is empty"
+        } else if self.treasury_id.trim().is_empty() {
+            "treasury_id is empty"
+        } else if self.beneficiary.trim().is_empty() {
+            "beneficiary is empty"
+        } else if self.justification.trim().is_empty() {
+            "justification is empty"
+        } else if self.amount == 0 {
+            "amount must be positive"
+        } else if self.amount > config.max_amount {
+            "amount exceeds max_amount"
+        } else {
+            match delay {
+                None => "execute_after precedes created_at",
+                Some(delay) if delay < config.min_delay_secs => {
+                    "delay is shorter than min_delay_secs"
+                }
+                Some(delay) if delay > config.max_delay_secs => {
+                    "delay is longer than max_delay_secs"
+                }
+                Some(_) => return Ok(()),
+            }
+        };
+
+        Err(AuditGuardError::InvalidOutflowRequest {
+            request_id: self.request_id.clone(),
+            reason: reason.to_string(),
+        })
+    }
+}
+
+/// Lifecycle position of a scheduled outflow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum TreasuryOutflowStatus {
+    /// Delay has not yet elapsed.
+    Pending,
+    /// Delay elapsed and the grace period has not closed.
+    Ready,
+    Executed,
+    Cancelled,
+    /// Grace period closed without execution.
+    Expired,
+}
+
+/// A request plus the time-lock state the guard tracks for it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScheduledTreasuryOutflow {
+    pub request: TreasuryOutflowRequest,
+    pub status: TreasuryOutflowStatus,
+    /// `request.execute_after + config.grace_period_secs`.
+    pub expires_at: u64,
+    pub executed_at: Option<u64>,
+    pub cancelled_at: Option<u64>,
+    pub cancellation_reason: Option<String>,
+}
+
+/// Result of an integrity sweep over the tracked requests.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TimeLockVerificationReport {
+    pub checked_requests: usize,
+    pub ready_requests: usize,
+    pub expired_requests: usize,
+}
+
 pub struct AuditGuardClient {
     client: Client,
-    api_url: Url,
+    api_url: String,
 }
 
 pub struct SecureTreasuryOutflowTimeLock {
@@ -167,19 +339,12 @@ impl AuditGuardClient {
             return Err(AuditGuardError::EmptyApiUrl);
         }
 
-        let parsed_url = Url::parse(api_url)
-            .map_err(|error| AuditGuardError::InvalidApiUrl(error.to_string()))?;
+        Url::parse(api_url).map_err(|error| AuditGuardError::InvalidApiUrl(error.to_string()))?;
 
         Ok(Self {
             client: Client::new(),
-            api_url: parsed_url,
+            api_url: api_url.to_string(),
         })
-    }
-
-    fn build_endpoint(&self, path: &str) -> Result<Url, AuditGuardError> {
-        self.api_url
-            .join(path)
-            .map_err(|error| AuditGuardError::InvalidEndpoint(error.to_string()))
     }
 
     /// Creates a new AuditGuardClient and validates the URL immediately
@@ -197,18 +362,17 @@ impl AuditGuardClient {
     pub async fn submit_report(&self, report: &AuditReport) -> Result<(), AuditGuardError> {
         validate_url(&self.api_url)?;
         report.validate()?;
-        
+
         let endpoint = format!("{}/api/v1/audit/reports", self.api_url);
-        
-        let response = self.client.post(&endpoint)
-            .json(report)
-            .send()
-            .await?;
+
+        let response = self.client.post(&endpoint).json(report).send().await?;
 
         if response.status().is_success() {
             Ok(())
         } else {
-            Err(AuditGuardError::ApiFailure { status: response.status() })
+            Err(AuditGuardError::ApiFailure {
+                status: response.status(),
+            })
         }
     }
 
@@ -216,16 +380,14 @@ impl AuditGuardClient {
     pub async fn get_report(&self, id: &str) -> Result<AuditReport, AuditGuardError> {
         validate_url(&self.api_url)?;
         if id.trim().is_empty() {
-            return Err(AuditGuardError::InvalidUrlFormat("Empty report ID".to_string()));
+            return Err(AuditGuardError::InvalidUrlFormat(
+                "Empty report ID".to_string(),
+            ));
         }
-        
+
         let endpoint = format!("{}/api/v1/audit/reports/{}", self.api_url, id);
 
-        let report: AuditReport = self.client.get(&endpoint)
-            .send()
-            .await?
-            .json()
-            .await?;
+        let report: AuditReport = self.client.get(&endpoint).send().await?.json().await?;
 
         report.validate()?;
         Ok(report)
@@ -245,12 +407,7 @@ impl AuditGuardClient {
 
         let endpoint = format!("{}/api/v1/anomaly/alerts", self.api_url);
 
-        let response = self
-            .client
-            .post(&endpoint)
-            .json(alert)
-            .send()
-            .await?;
+        let response = self.client.post(&endpoint).json(alert).send().await?;
 
         if response.status().is_success() {
             Ok(())
@@ -299,10 +456,8 @@ impl SecureTreasuryOutflowTimeLock {
             cancellation_reason: None,
         };
 
-        self.requests.insert(
-            scheduled.request.request_id.clone(),
-            scheduled.clone(),
-        );
+        self.requests
+            .insert(scheduled.request.request_id.clone(), scheduled.clone());
 
         Ok(scheduled)
     }
@@ -336,18 +491,14 @@ impl SecureTreasuryOutflowTimeLock {
                 scheduled.executed_at = Some(now);
                 Ok(scheduled.clone())
             }
-            TreasuryOutflowStatus::Executed => {
-                Err(AuditGuardError::RequestAlreadyExecuted {
-                    request_id: request_id.to_string(),
-                    executed_at: scheduled.executed_at.unwrap_or(now),
-                })
-            }
-            TreasuryOutflowStatus::Cancelled => {
-                Err(AuditGuardError::RequestAlreadyCancelled {
-                    request_id: request_id.to_string(),
-                    cancelled_at: scheduled.cancelled_at.unwrap_or(now),
-                })
-            }
+            TreasuryOutflowStatus::Executed => Err(AuditGuardError::RequestAlreadyExecuted {
+                request_id: request_id.to_string(),
+                executed_at: scheduled.executed_at.unwrap_or(now),
+            }),
+            TreasuryOutflowStatus::Cancelled => Err(AuditGuardError::RequestAlreadyCancelled {
+                request_id: request_id.to_string(),
+                cancelled_at: scheduled.cancelled_at.unwrap_or(now),
+            }),
             TreasuryOutflowStatus::Expired => Err(AuditGuardError::RequestExpired {
                 request_id: request_id.to_string(),
                 expired_at: scheduled.expires_at,
@@ -373,12 +524,10 @@ impl SecureTreasuryOutflowTimeLock {
                 request_id: request_id.to_string(),
                 executed_at: scheduled.executed_at.unwrap_or(now),
             }),
-            TreasuryOutflowStatus::Cancelled => {
-                Err(AuditGuardError::RequestAlreadyCancelled {
-                    request_id: request_id.to_string(),
-                    cancelled_at: scheduled.cancelled_at.unwrap_or(now),
-                })
-            }
+            TreasuryOutflowStatus::Cancelled => Err(AuditGuardError::RequestAlreadyCancelled {
+                request_id: request_id.to_string(),
+                cancelled_at: scheduled.cancelled_at.unwrap_or(now),
+            }),
             TreasuryOutflowStatus::Pending
             | TreasuryOutflowStatus::Ready
             | TreasuryOutflowStatus::Expired => {
@@ -416,8 +565,9 @@ impl SecureTreasuryOutflowTimeLock {
                     if scheduled.executed_at.is_some() || scheduled.cancelled_at.is_some() {
                         return Err(AuditGuardError::StateIntegrityViolation {
                             request_id: request_id.clone(),
-                            detail: "pending request cannot have execution or cancellation timestamps"
-                                .to_string(),
+                            detail:
+                                "pending request cannot have execution or cancellation timestamps"
+                                    .to_string(),
                         });
                     }
 
@@ -434,8 +584,9 @@ impl SecureTreasuryOutflowTimeLock {
                     if scheduled.executed_at.is_some() || scheduled.cancelled_at.is_some() {
                         return Err(AuditGuardError::StateIntegrityViolation {
                             request_id: request_id.clone(),
-                            detail: "ready request cannot have execution or cancellation timestamps"
-                                .to_string(),
+                            detail:
+                                "ready request cannot have execution or cancellation timestamps"
+                                    .to_string(),
                         });
                     }
 
@@ -496,8 +647,9 @@ impl SecureTreasuryOutflowTimeLock {
                     if scheduled.executed_at.is_some() || scheduled.cancelled_at.is_some() {
                         return Err(AuditGuardError::StateIntegrityViolation {
                             request_id: request_id.clone(),
-                            detail: "expired request cannot have execution or cancellation timestamps"
-                                .to_string(),
+                            detail:
+                                "expired request cannot have execution or cancellation timestamps"
+                                    .to_string(),
                         });
                     }
 
@@ -565,10 +717,6 @@ impl ScheduledTreasuryOutflow {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wiremock::{
-        matchers::{method, path},
-        Mock, MockServer, ResponseTemplate,
-    };
 
     fn base_config() -> TreasuryOutflowTimeLockConfig {
         TreasuryOutflowTimeLockConfig {
@@ -580,7 +728,11 @@ mod tests {
         }
     }
 
-    fn sample_request(request_id: &str, created_at: u64, execute_after: u64) -> TreasuryOutflowRequest {
+    fn sample_request(
+        request_id: &str,
+        created_at: u64,
+        execute_after: u64,
+    ) -> TreasuryOutflowRequest {
         TreasuryOutflowRequest {
             request_id: request_id.to_string(),
             treasury_id: "treasury-main".to_string(),
@@ -593,12 +745,144 @@ mod tests {
     }
 
     #[test]
-    fn confirmed_record_is_serializable() {
-        let record = ConfirmedAuditRecord {
-            record_id: "test-policy-1".into(),
-            observed_at: "2026-07-19T00:00:00Z".into(),
-            evidence_hash: "0".repeat(64),
-            payload: json!({ "policy": "test", "confirmed": true }),
+    fn timelock_rejects_requests_outside_the_configured_delay_window() {
+        let config = base_config();
+        let too_soon = sample_request("req-1", 1_000, 1_030);
+        let too_late = sample_request("req-2", 1_000, 1_000 + 86_401);
+        let inverted = sample_request("req-3", 1_000, 900);
+
+        for request in [too_soon, too_late, inverted] {
+            assert!(matches!(
+                request.validate(&config),
+                Err(AuditGuardError::InvalidOutflowRequest { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn timelock_refuses_release_before_unlock_and_allows_it_after() {
+        let mut timelock = SecureTreasuryOutflowTimeLock::new(base_config()).unwrap();
+        timelock
+            .schedule_outflow(sample_request("req-1", 1_000, 2_000))
+            .unwrap();
+
+        assert!(matches!(
+            timelock.release_outflow("req-1", 1_500),
+            Err(AuditGuardError::RequestStillLocked {
+                unlock_at: 2_000,
+                ..
+            })
+        ));
+
+        let released = timelock.release_outflow("req-1", 2_100).unwrap();
+        assert_eq!(released.status, TreasuryOutflowStatus::Executed);
+        assert_eq!(released.executed_at, Some(2_100));
+
+        assert!(matches!(
+            timelock.release_outflow("req-1", 2_200),
+            Err(AuditGuardError::RequestAlreadyExecuted { .. })
+        ));
+    }
+
+    #[test]
+    fn timelock_expires_requests_left_past_the_grace_period() {
+        let mut timelock = SecureTreasuryOutflowTimeLock::new(base_config()).unwrap();
+        timelock
+            .schedule_outflow(sample_request("req-1", 1_000, 2_000))
+            .unwrap();
+
+        assert!(matches!(
+            timelock.release_outflow("req-1", 2_400),
+            Err(AuditGuardError::RequestExpired {
+                expired_at: 2_300,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn timelock_enforces_unique_ids_and_the_pending_ceiling() {
+        let mut timelock = SecureTreasuryOutflowTimeLock::new(base_config()).unwrap();
+        timelock
+            .schedule_outflow(sample_request("req-1", 1_000, 2_000))
+            .unwrap();
+
+        assert!(matches!(
+            timelock.schedule_outflow(sample_request("req-1", 1_000, 2_000)),
+            Err(AuditGuardError::DuplicateRequestId { .. })
+        ));
+
+        timelock
+            .schedule_outflow(sample_request("req-2", 1_000, 2_000))
+            .unwrap();
+        assert!(matches!(
+            timelock.schedule_outflow(sample_request("req-3", 1_000, 2_000)),
+            Err(AuditGuardError::TooManyPendingRequests { limit: 2 })
+        ));
+    }
+
+    #[test]
+    fn timelock_cancellation_requires_a_reason_and_blocks_later_release() {
+        let mut timelock = SecureTreasuryOutflowTimeLock::new(base_config()).unwrap();
+        timelock
+            .schedule_outflow(sample_request("req-1", 1_000, 2_000))
+            .unwrap();
+
+        assert!(matches!(
+            timelock.cancel_outflow("req-1", "no", 1_500),
+            Err(AuditGuardError::InvalidCancellationReason)
+        ));
+
+        let cancelled = timelock
+            .cancel_outflow("req-1", "superseded by treasury vote", 1_500)
+            .unwrap();
+        assert_eq!(cancelled.status, TreasuryOutflowStatus::Cancelled);
+
+        assert!(matches!(
+            timelock.release_outflow("req-1", 2_100),
+            Err(AuditGuardError::RequestAlreadyCancelled { .. })
+        ));
+    }
+
+    #[test]
+    fn timelock_verification_reports_state_and_rejects_unknown_requests() {
+        let mut timelock = SecureTreasuryOutflowTimeLock::new(base_config()).unwrap();
+        timelock
+            .schedule_outflow(sample_request("req-1", 1_000, 2_000))
+            .unwrap();
+
+        assert!(matches!(
+            timelock.get_outflow("missing"),
+            Err(AuditGuardError::UnknownRequest { .. })
+        ));
+
+        let report = timelock.verify_state_integrity(1_500).unwrap();
+        assert_eq!(
+            report,
+            TimeLockVerificationReport {
+                checked_requests: 1,
+                ready_requests: 0,
+                expired_requests: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn timelock_rejects_incoherent_configuration() {
+        let mut config = base_config();
+        config.max_delay_secs = 10;
+        assert!(matches!(
+            SecureTreasuryOutflowTimeLock::new(config),
+            Err(AuditGuardError::InvalidTimeLockConfig { .. })
+        ));
+    }
+
+    #[test]
+    fn test_valid_audit_report() {
+        let report = AuditReport {
+            policy_name: "test-policy".to_string(),
+            compliant: true,
+            violations: vec![],
         };
         assert_eq!(report.policy_name, "test-policy");
         assert!(report.compliant);
@@ -671,10 +955,7 @@ mod tests {
     fn test_url_validation() {
         assert!(validate_url("https://api.vero.audit").is_ok());
         assert!(validate_url("http://localhost:8080").is_ok());
-        assert!(matches!(
-            validate_url(""),
-            Err(AuditGuardError::EmptyUrl)
-        ));
+        assert!(matches!(validate_url(""), Err(AuditGuardError::EmptyUrl)));
         assert!(matches!(
             validate_url("ftp://invalid-scheme"),
             Err(AuditGuardError::InvalidUrlFormat(_))
@@ -790,10 +1071,7 @@ mod tests {
         let err = AuditGuardError::DashboardChannelUnavailable {
             reason: "HTTP 503".to_string(),
         };
-        assert_eq!(
-            err.to_string(),
-            "Dashboard channel unavailable: HTTP 503"
-        );
+        assert_eq!(err.to_string(), "Dashboard channel unavailable: HTTP 503");
     }
 
     #[test]
