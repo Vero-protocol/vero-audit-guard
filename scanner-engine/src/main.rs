@@ -155,12 +155,15 @@ fn main() {
         std::process::exit(1);
     }
 
-    if let Err(e) = run_audit_guard_verification(&report) {
+    if let Err(e) = tokio::runtime::Runtime::new()
+        .expect("failed to create tokio runtime")
+        .block_on(run_audit_guard_verification(&report))
+    {
         eprintln!("[scanner] Audit guard verification failed: {e}");
     }
 }
 
-fn run_audit_guard_verification(report: &ScanReport) -> Result<(), AuditGuardError> {
+async fn run_audit_guard_verification(report: &ScanReport) -> Result<(), AuditGuardError> {
     let api_url = match env::var("AUDIT_GUARD_API_URL") {
         Ok(url) if !url.trim().is_empty() => url,
         _ => return Ok(()),
@@ -179,7 +182,7 @@ fn run_audit_guard_verification(report: &ScanReport) -> Result<(), AuditGuardErr
             .collect(),
     };
 
-    client.submit_report(&verification)?;
+    client.submit_report(&verification).await?;
     eprintln!("[scanner] Audit guard verification submitted.");
     Ok(())
 }
