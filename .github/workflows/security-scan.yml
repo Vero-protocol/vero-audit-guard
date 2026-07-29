@@ -55,6 +55,14 @@ jobs:
         run: cargo build --release
         working-directory: scanner-engine
 
+      - name: Run audit-guard unit tests (ZK state validation hooks)
+        run: cargo test
+        working-directory: src/audit-guard
+
+      - name: Run scanner-engine unit tests
+        run: cargo test
+        working-directory: scanner-engine
+
       - name: Run static analysis
         run: |
           mkdir -p ../reports

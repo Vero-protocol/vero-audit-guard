@@ -19,6 +19,11 @@ pub fn validate_drift_js(event: JsValue) -> Result<(), JsValue> {
     }
 }
 
+pub mod zk_state_validator;
+pub use zk_state_validator::{
+    compute_commitment, StateTransitionProof, ZkStateError, ZkStateValidationHook,
+};
+
 #[derive(Error, Debug)]
 pub enum AuditGuardError {
     #[error("API URL cannot be empty")]
