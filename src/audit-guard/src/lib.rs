@@ -1,7 +1,8 @@
 use reqwest::{Client, StatusCode, Url};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-
+pub mod drift_validator;
+pub mod drift_error;
 #[derive(Error, Debug)]
 pub enum AuditGuardError {
     #[error("API URL cannot be empty")]
