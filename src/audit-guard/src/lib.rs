@@ -6,6 +6,8 @@ pub mod zk_state_validator;
 pub use zk_state_validator::{
     compute_commitment, StateTransitionProof, ZkStateError, ZkStateValidationHook,
 };
+pub mod telemetry_queue;
+pub mod drift_consumer;
 
 #[derive(Error, Debug)]
 pub enum AuditGuardError {
@@ -42,6 +44,12 @@ pub enum AuditGuardError {
 
     #[error("Dashboard channel unavailable: {reason}")]
     DashboardChannelUnavailable { reason: String },
+
+    #[error("Invalid drift event payload: {reason}")]
+    InvalidDriftPayload { reason: String },
+
+    #[error("Drift processing failed: {reason}")]
+    DriftProcessingFailed { reason: String },
 
     #[error("Invalid anomaly alert payload: {reason}")]
     InvalidAnomalyPayload { reason: String },
