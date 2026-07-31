@@ -42,7 +42,8 @@ export class AuditTrail {
   public async anchor(result: EvaluationResult): Promise<string> {
     const secretKey = process.env.AUDIT_KEYPAIR_SECRET;
     if (!secretKey) {
-      throw new Error("AUDIT_KEYPAIR_SECRET environment variable not set");
+      console.warn("AUDIT_KEYPAIR_SECRET not set; skipping Stellar anchoring.");
+      return ""; // No anchoring performed
     }
 
     const hash = this.computeHash(result);

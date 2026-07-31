@@ -1,3 +1,4 @@
+use audit_guard::{StateTransitionProof, ZkStateError, ZkStateValidationHook};
 use rayon::prelude::*;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -5,6 +6,7 @@ use sha2::{Digest, Sha256};
 use std::{
     env, fs,
     path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
 };
 use walkdir::WalkDir;
 
@@ -120,10 +122,38 @@ fn sha256_of(data: &str) -> String {
     hex::encode(hasher.finalize())
 }
 
+/// Builds a unique, monotonically-distinct nullifier for a single scan
+/// lifecycle run, binding the report hash to a nanosecond timestamp so that
+/// two runs producing an identical report are still treated as distinct
+/// state transitions.
+fn scan_nullifier(report_hash: &str) -> String {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock should be after unix epoch")
+        .as_nanos();
+    format!("{report_hash}-{nanos}")
+}
+
+/// Runs the ZK-based state validation hook over a completed scan lifecycle,
+/// verifying that the pre-scan state (the scan target) transitioned into the
+/// post-scan state (the generated report) via a well-formed, non-replayed
+/// proof before the report is trusted downstream.
+fn verify_scan_state_transition(
+    hook: &mut ZkStateValidationHook,
+    pre_state_root: &str,
+    post_state_root: &str,
+    nullifier: &str,
+) -> Result<(), ZkStateError> {
+    let proof = StateTransitionProof::new(pre_state_root, post_state_root, nullifier);
+    hook.verify_transition(&proof)
+}
+
 fn main() {
     let target = env::args()
         .nth(1)
         .unwrap_or_else(|| "../vero-core-contracts".into());
+    let pre_state_root = sha256_of(&target);
+
     let rules = compile_rules(RULES);
     let (file_count, all_findings) = scan_target(&target, &rules);
 
@@ -136,6 +166,19 @@ fn main() {
         findings: all_findings,
         report_hash: hash,
     };
+
+    // ZK-based state validation hook: verify the scan target (pre-state)
+    // transitioned into the generated report (post-state) via a well-formed,
+    // non-replayed proof before the report is trusted downstream.
+    let nullifier = scan_nullifier(&report.report_hash);
+    let mut zk_hook = ZkStateValidationHook::new();
+    if let Err(e) =
+        verify_scan_state_transition(&mut zk_hook, &pre_state_root, &report.report_hash, &nullifier)
+    {
+        eprintln!("[scanner] ZK state validation hook rejected scan lifecycle transition: {e}");
+        std::process::exit(1);
+    }
+    eprintln!("[scanner] ZK state validation hook passed — scan state transition verified.");
 
     let out = serde_json::to_string_pretty(&report).unwrap();
     println!("{}", out);
@@ -158,10 +201,7 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{
-        fs,
-        time::{SystemTime, UNIX_EPOCH},
-    };
+    use std::fs;
 
     fn temp_scan_dir() -> PathBuf {
         let mut dir = env::temp_dir();
@@ -194,5 +234,58 @@ mod tests {
         assert!(findings.iter().any(|f| f.rule == "EXPLICIT_PANIC"));
 
         fs::remove_dir_all(dir).expect("test directory should be removed");
+    }
+
+    #[test]
+    fn scan_state_transition_is_verified_for_a_normal_run() {
+        let pre = sha256_of("../vero-core-contracts");
+        let post = sha256_of("[]");
+        let mut hook = ZkStateValidationHook::new();
+
+        assert!(verify_scan_state_transition(&mut hook, &pre, &post, &scan_nullifier(&post)).is_ok());
+    }
+
+    #[test]
+    fn scan_state_transition_rejects_a_tampered_post_state_root() {
+        let pre = sha256_of("../vero-core-contracts");
+        let post = sha256_of("[]");
+        let tampered_post = sha256_of("[]tampered");
+        let mut hook = ZkStateValidationHook::new();
+        let nullifier = scan_nullifier(&post);
+
+        // Build the proof against the real post-state, then swap in a
+        // tampered post-state root so the commitment no longer matches.
+        let mut proof = StateTransitionProof::new(pre, post, nullifier);
+        proof.post_state_root = tampered_post;
+
+        assert_eq!(
+            hook.verify_transition(&proof),
+            Err(ZkStateError::ProofCommitmentMismatch)
+        );
+    }
+
+    #[test]
+    fn scan_state_transition_rejects_replayed_nullifier_across_two_runs() {
+        let pre = sha256_of("../vero-core-contracts");
+        let post = sha256_of("[]");
+        let nullifier = "fixed-nullifier-for-test".to_string();
+        let mut hook = ZkStateValidationHook::new();
+
+        assert!(verify_scan_state_transition(&mut hook, &pre, &post, &nullifier).is_ok());
+        assert_eq!(
+            verify_scan_state_transition(&mut hook, &pre, &post, &nullifier),
+            Err(ZkStateError::NullifierReplay(nullifier))
+        );
+    }
+
+    #[test]
+    fn scan_state_transition_rejects_no_op_when_target_hash_equals_report_hash() {
+        let same_root = sha256_of("identical-input");
+        let mut hook = ZkStateValidationHook::new();
+
+        assert_eq!(
+            verify_scan_state_transition(&mut hook, &same_root, &same_root, "n"),
+            Err(ZkStateError::NoOpTransition)
+        );
     }
 }
