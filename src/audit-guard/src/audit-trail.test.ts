@@ -4,6 +4,7 @@
 
 import AuditTrail from "../src/audit-trail";
 import { EvaluationResult } from "../src/policy-engine";
+import { Keypair } from "@stellar/stellar-sdk";
 
 describe("AuditTrail", () => {
   let trail: AuditTrail;
@@ -19,7 +20,7 @@ describe("AuditTrail", () => {
 
   beforeEach(() => {
     trail = new AuditTrail();
-    process.env.AUDIT_KEYPAIR_SECRET = "SDY6E2LRE2XW56X6XG7ZJPHX663W6K2N63X6XG7ZJPHX663W6K2N63X6"; // Example secret key (invalid)
+    process.env.AUDIT_KEYPAIR_SECRET = Keypair.random().secret();
   });
 
   describe("computeHash", () => {

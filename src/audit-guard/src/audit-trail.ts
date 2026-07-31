@@ -46,10 +46,10 @@ export class AuditTrail {
     }
 
     const hash = this.computeHash(result);
-    const keypair = Keypair.fromSecret(secretKey);
     const server = new Server(this.horizonUrl);
 
     try {
+      const keypair = Keypair.fromSecret(secretKey);
       const account = await server.loadAccount(keypair.publicKey());
 
       // Use MEMO_HASH for full 256-bit collision resistance
