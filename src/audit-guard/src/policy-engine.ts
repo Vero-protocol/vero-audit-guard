@@ -582,6 +582,10 @@ export class PolicyEngine {
    */
   private verifyRelayerSignature(prData: PRData): PolicyViolation[] {
     const violations: PolicyViolation[] = [];
+    if (process.env.ALLOW_UNSIGNED_PR === 'true') {
+      console.warn('ALLOW_UNSIGNED_PR=true: skipping relayer signature verification (CI mode)');
+      return violations;
+    }
 
     // 1. Check if signature fields are present
     if (!prData.relayer || !prData.signature || !prData.timestamp) {

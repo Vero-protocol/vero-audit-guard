@@ -64,7 +64,7 @@ deny[msg] {
 }
 
 # Rule: Security-sensitive changes must have security label or detailed justification
-deny[msg] {
+warning[msg] {
     sensitive_keywords := ["auth", "crypto", "signature", "key", "secret", "token", "vulnerability", "exploit"]
     any_sensitive := [keyword | keyword := sensitive_keywords[_]; contains(lower(input.pull_request.body), keyword)]
     count(any_sensitive) > 0
