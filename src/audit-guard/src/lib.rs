@@ -1,9 +1,40 @@
+use std::collections::BTreeMap;
 use reqwest::{Client, StatusCode, Url};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+pub mod drift_validator;
+pub mod drift_error;
+
+use wasm_bindgen::prelude::*;
+use serde_json::Value as JsonValue;
+
+#[wasm_bindgen]
+pub fn validate_drift_js(event: JsValue) -> Result<(), JsValue> {
+    // Deserialize the incoming JS value into the Rust DriftEvent struct
+    let dr_event: drift_validator::DriftEvent = event.into_serde().map_err(|e| JsValue::from_str(&e.to_string()))?;
+    // Run the core validation logic
+    match drift_validator::validate_drift(&dr_event) {
+        Ok(()) => Ok(()),
+        Err(err) => Err(JsValue::from_str(&err.to_string())),
+    }
+}
+
+pub mod zk_state_validator;
+pub use zk_state_validator::{
+    compute_commitment, StateTransitionProof, ZkStateError, ZkStateValidationHook,
+};
 
 #[derive(Error, Debug)]
 pub enum AuditGuardError {
+    #[error("API URL cannot be empty")]
+    EmptyApiUrl,
+
+    #[error("Invalid API URL: {0}")]
+    InvalidApiUrl(String),
+
+    #[error("Invalid endpoint: {0}")]
+    InvalidEndpoint(String),
+
     #[error("API URL cannot be empty")]
     EmptyUrl,
 
@@ -46,7 +77,30 @@ pub enum AuditGuardError {
         attempts: u32,
         last_error: String,
     },
+
+    #[error("Duplicate request ID: {request_id}")]
+    DuplicateRequestId { request_id: String },
+
+    #[error("Too many pending requests: {limit}")]
+    TooManyPendingRequests { limit: usize },
+
+    #[error("Unknown request ID: {request_id}")]
+    UnknownRequest { request_id: String },
+
+    #[error("Request {request_id} still locked until {unlock_at}")]
+    RequestStillLocked { request_id: String, unlock_at: u64 },
+
+    #[error("Request {request_id} already executed at {executed_at}")]
+    RequestAlreadyExecuted { request_id: String, executed_at: u64 },
+
+    #[error("Request {request_id} already cancelled at {cancelled_at}")]
+    RequestAlreadyCancelled { request_id: String, cancelled_at: u64 },
+
+    #[error("Request {request_id} expired at {expired_at}")]
+    RequestExpired { request_id: String, expired_at: u64 },
 }
+
+pub mod hot_reload;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AuditReport {
@@ -140,9 +194,77 @@ pub struct AuditGuardClient {
     api_url: Url,
 }
 
+/// Configuration for the treasury outflow time lock.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TreasuryOutflowTimeLockConfig {
+    pub min_delay_secs: u64,
+    pub max_delay_secs: u64,
+    pub max_amount: u64,
+    pub grace_period_secs: u64,
+    pub max_pending_requests: usize,
+}
+
+impl TreasuryOutflowTimeLockConfig {
+    pub fn validate(&self) -> Result<(), AuditGuardError> {
+        if self.min_delay_secs > self.max_delay_secs {
+            return Err(AuditGuardError::InvalidUrlFormat("min_delay_secs > max_delay_secs".to_string()));
+        }
+        if self.max_amount == 0 {
+            return Err(AuditGuardError::InvalidUrlFormat("max_amount must be > 0".to_string()));
+        }
+        Ok(())
+    }
+}
+
+/// A request to outflow treasury funds.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TreasuryOutflowRequest {
+    pub request_id: String,
+    pub treasury_id: String,
+    pub beneficiary: String,
+    pub amount: u64,
+    pub created_at: u64,
+    pub execute_after: u64,
+    pub justification: String,
+}
+
+impl TreasuryOutflowRequest {
+    pub fn validate(&self, config: &TreasuryOutflowTimeLockConfig) -> Result<(), AuditGuardError> {
+        if self.amount > config.max_amount {
+            return Err(AuditGuardError::InvalidUrlFormat("amount exceeds max_amount".to_string()));
+        }
+        let delay = self.execute_after.saturating_sub(self.created_at);
+        if delay < config.min_delay_secs || delay > config.max_delay_secs {
+            return Err(AuditGuardError::InvalidUrlFormat("delay out of bounds".to_string()));
+        }
+        Ok(())
+    }
+}
+
+/// Represents a scheduled treasury outflow.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScheduledTreasuryOutflow {
+    pub expires_at: u64,
+    pub request: TreasuryOutflowRequest,
+    pub status: TreasuryOutflowStatus,
+    pub executed_at: Option<u64>,
+    pub cancelled_at: Option<u64>,
+    pub cancellation_reason: Option<String>,
+}
+
 pub struct SecureTreasuryOutflowTimeLock {
     config: TreasuryOutflowTimeLockConfig,
     requests: BTreeMap<String, ScheduledTreasuryOutflow>,
+}
+
+/// TreasuryOutflowStatus enum used throughout the time‑lock logic
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TreasuryOutflowStatus {
+    Pending,
+    Ready,
+    Executed,
+    Cancelled,
+    Expired,
 }
 
 fn validate_url(url: &str) -> Result<(), AuditGuardError> {

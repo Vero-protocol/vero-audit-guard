@@ -16,6 +16,10 @@ rayon = "1"
 # rayon pulls this in transitively via rayon-core -> crossbeam-deque.
 crossbeam-epoch = "0.9.20"
 
+# RUSTSEC-2026-0204: pin crossbeam-epoch away from vulnerable 0.9.18;
+# rayon pulls this in transitively via rayon-core -> crossbeam-deque.
+crossbeam-epoch = "0.9.20"
+
 [[bin]]
 name = "scanner"
 path = "src/main.rs"
