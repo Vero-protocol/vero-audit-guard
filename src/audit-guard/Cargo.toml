@@ -16,6 +16,7 @@ wasm-bindgen = { version = "0.2", features = ["serde-serialize"] }
 notify = "6"
 log = "0.4"
 chrono = "0.4"
+regorus = { version = "0.11", default-features = false, features = ["std", "regex"] }
 
 [dev-dependencies]
 wiremock = "0.5"
