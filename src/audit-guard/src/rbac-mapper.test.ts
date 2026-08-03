@@ -11,7 +11,7 @@
  *  - generateReport() output shape
  */
 
-import RbacMapper from "./rbac-mapper";
+import RbacMapper, { RbacMapperError } from "./rbac-mapper";
 import type { RbacPolicy, RbacScanResult } from "./rbac-mapper";
 
 // ---------------------------------------------------------------------------
@@ -99,6 +99,44 @@ describe("RbacMapper — input validation", () => {
   it("throws when users is missing", () => {
     const mapper = makeMapper();
     expect(() => mapper.scan({ roles: [] } as any)).toThrow();
+  });
+
+  it("rejects duplicate role ids without changing the policy", () => {
+    const policy = {
+      roles: [VIEWER_ROLE, { ...VIEWER_ROLE, name: "Viewer copy" }],
+      users: [],
+    };
+
+    expect(() => makeMapper().scan(policy)).toThrow(RbacMapperError);
+    expect(policy.roles).toHaveLength(2);
+  });
+
+  it("rejects unknown role references", () => {
+    const policy: RbacPolicy = {
+      roles: [{ ...VIEWER_ROLE, inherits: ["missing-role"] }],
+      users: [],
+    };
+
+    expect(() => makeMapper().scan(policy)).toThrow(
+      "role viewer inherits unknown role: missing-role"
+    );
+  });
+
+  it("rejects users with unknown roles", () => {
+    const policy: RbacPolicy = {
+      roles: [VIEWER_ROLE],
+      users: [{ id: "u1", name: "User", roles: ["missing-role"] }],
+    };
+
+    expect(() => makeMapper().scan(policy)).toThrow(
+      "user u1 references unknown role: missing-role"
+    );
+  });
+
+  it("rejects invalid inheritance depth", () => {
+    expect(() => new RbacMapper({ maxInheritanceDepth: 0 })).toThrow(
+      "maxInheritanceDepth must be a positive integer"
+    );
   });
 });
 

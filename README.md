@@ -132,6 +132,8 @@ This will:
 | `FAILED_TX_THRESHOLD`    | anomaly-detector     | Failed TX count threshold (default: 10)        |
 | `STELLAR_NETWORK`        | audit-trail          | `mainnet` or `testnet` (default: testnet)      |
 | `HORIZON_URL`            | audit-trail          | Horizon server URL                             |
+| `POLICY_BUNDLE_SIGNATURE`| audit-guard          | Detached hex signature over the signed policy-bundle manifest |
+| `POLICY_BUNDLE_SIGNERS`  | audit-guard          | Comma-separated trusted policy-bundle signer public keys |
 
 ---
 

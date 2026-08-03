@@ -127,6 +127,26 @@ export interface RbacScanOptions {
   dangerousPermissions?: Permission[];
 }
 
+export type RbacMapperErrorCode =
+  | "INVALID_POLICY"
+  | "INVALID_ROLE"
+  | "INVALID_USER"
+  | "DUPLICATE_ROLE"
+  | "DUPLICATE_USER"
+  | "UNKNOWN_ROLE"
+  | "INVALID_OPTIONS";
+
+export class RbacMapperError extends Error {
+  public readonly code: RbacMapperErrorCode;
+
+  public constructor(code: RbacMapperErrorCode, message: string) {
+    super(message);
+    this.name = "RbacMapperError";
+    this.code = code;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Defaults
 // ---------------------------------------------------------------------------
@@ -171,6 +191,7 @@ export class RbacMapper {
   private readonly dangerousPermissions: Set<Permission>;
 
   constructor(options: RbacScanOptions = {}) {
+    this.validateOptions(options);
     this.maxDepth = options.maxInheritanceDepth ?? DEFAULT_MAX_DEPTH;
     this.dangerousPermissions = new Set([
       ...DEFAULT_DANGEROUS_PERMISSIONS,
@@ -187,9 +208,8 @@ export class RbacMapper {
    * `RbacScanResult`.
    */
   public scan(policy: RbacPolicy, _options: RbacScanOptions = {}): RbacScanResult {
-    if (!policy || !Array.isArray(policy.roles) || !Array.isArray(policy.users)) {
-      throw new Error("RbacMapper.scan: policy must have 'roles' and 'users' arrays");
-    }
+    this.validateOptions(_options);
+    this.validatePolicy(policy);
 
     const roleMap = this.buildRoleMap(policy.roles);
     const effectivePermMap = this.resolveAllPermissions(roleMap);
@@ -235,6 +255,114 @@ export class RbacMapper {
       summary,
       scanTimestamp: new Date().toISOString(),
     };
+  }
+
+  private validateOptions(options: RbacScanOptions): void {
+    if (options === null || typeof options !== "object") {
+      throw new RbacMapperError("INVALID_OPTIONS", "RBAC options must be an object");
+    }
+
+    if (
+      options.maxInheritanceDepth !== undefined &&
+      (!Number.isInteger(options.maxInheritanceDepth) || options.maxInheritanceDepth < 1)
+    ) {
+      throw new RbacMapperError(
+        "INVALID_OPTIONS",
+        "maxInheritanceDepth must be a positive integer"
+      );
+    }
+
+    if (
+      options.dangerousPermissions !== undefined &&
+      (!Array.isArray(options.dangerousPermissions) ||
+        options.dangerousPermissions.some(
+          (permission) => typeof permission !== "string" || permission.trim().length === 0
+        ))
+    ) {
+      throw new RbacMapperError(
+        "INVALID_OPTIONS",
+        "dangerousPermissions must contain non-empty strings"
+      );
+    }
+  }
+
+  private validatePolicy(policy: RbacPolicy): void {
+    if (!policy || !Array.isArray(policy.roles) || !Array.isArray(policy.users)) {
+      throw new RbacMapperError(
+        "INVALID_POLICY",
+        "policy must have 'roles' and 'users' arrays"
+      );
+    }
+
+    const roleIds = new Set<string>();
+    for (const role of policy.roles) {
+      if (
+        !role ||
+        typeof role.id !== "string" ||
+        role.id.trim().length === 0 ||
+        typeof role.name !== "string" ||
+        role.name.trim().length === 0 ||
+        !Array.isArray(role.permissions) ||
+        role.permissions.some(
+          (permission) => typeof permission !== "string" || permission.trim().length === 0
+        ) ||
+        (role.inherits !== undefined &&
+          (!Array.isArray(role.inherits) ||
+            role.inherits.some(
+              (parentId) => typeof parentId !== "string" || parentId.trim().length === 0
+            )))
+      ) {
+        throw new RbacMapperError(
+          "INVALID_ROLE",
+          "each role must have non-empty id, name, and permission values"
+        );
+      }
+      if (roleIds.has(role.id)) {
+        throw new RbacMapperError("DUPLICATE_ROLE", `duplicate role id: ${role.id}`);
+      }
+      roleIds.add(role.id);
+    }
+
+    for (const role of policy.roles) {
+      for (const parentId of role.inherits ?? []) {
+        if (!roleIds.has(parentId)) {
+          throw new RbacMapperError(
+            "UNKNOWN_ROLE",
+            `role ${role.id} inherits unknown role: ${parentId}`
+          );
+        }
+      }
+    }
+
+    const userIds = new Set<string>();
+    for (const user of policy.users) {
+      if (
+        !user ||
+        typeof user.id !== "string" ||
+        user.id.trim().length === 0 ||
+        typeof user.name !== "string" ||
+        user.name.trim().length === 0 ||
+        !Array.isArray(user.roles) ||
+        user.roles.some((roleId) => typeof roleId !== "string" || roleId.trim().length === 0)
+      ) {
+        throw new RbacMapperError(
+          "INVALID_USER",
+          "each user must have non-empty id, name, and role values"
+        );
+      }
+      if (userIds.has(user.id)) {
+        throw new RbacMapperError("DUPLICATE_USER", `duplicate user id: ${user.id}`);
+      }
+      userIds.add(user.id);
+      for (const roleId of user.roles) {
+        if (!roleIds.has(roleId)) {
+          throw new RbacMapperError(
+            "UNKNOWN_ROLE",
+            `user ${user.id} references unknown role: ${roleId}`
+          );
+        }
+      }
+    }
   }
 
   /**

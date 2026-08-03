@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "algorithm": "sha256",
+  "files": [
+    {
+      "path": "crypto.rego",
+      "sha256": "2622e29dc253ee9b5de220446b0730ab710b4e2884cc5790a3c27458e5c7b6a9",
+      "bytes": 1453
+    },
+    {
+      "path": "dependencies.rego",
+      "sha256": "af9ac251277cf8825c48c88d70d7d6f25f972f01df65a77c68f71923f5f2237a",
+      "bytes": 2977
+    },
+    {
+      "path": "lib.rego",
+      "sha256": "929ed6146606b7b343d851e9549b5cd56c2c185ce7be47427f876686aad1fd32",
+      "bytes": 849
+    },
+    {
+      "path": "logic_errors.rego",
+      "sha256": "a3a94eee53007d9c28272df500b8258c3c184b05d3201a8dcd117ac4d6abcaf7",
+      "bytes": 10814
+    },
+    {
+      "path": "pr_compliance.rego",
+      "sha256": "bb2e11827c53eb794bd2972146bdd41bc3bdddaf1f1dcb62c05a2f7a0a45f3e0",
+      "bytes": 6520
+    },
+    {
+      "path": "rbac.rego",
+      "sha256": "1b65cfa65a61bcd71daf94bcdef0b588afa0d2aa8099757e4c1e7e489720a87a",
+      "bytes": 5962
+    }
+  ],
+  "bundle_digest": "644be98ab7bbff4d4148605c2060c9cb6369c69964cb8f2edcd5ca5fd8cfe7e3"
+}

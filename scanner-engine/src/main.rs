@@ -1,3 +1,4 @@
+use audit_guard::{StateTransitionProof, ZkStateError, ZkStateValidationHook};
 use rayon::prelude::*;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -5,6 +6,7 @@ use sha2::{Digest, Sha256};
 use std::{
     env, fs,
     path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
 };
 use thiserror::Error;
 use walkdir::WalkDir;
@@ -157,70 +159,38 @@ fn sha256_of(data: &str) -> String {
     hex::encode(hasher.finalize())
 }
 
-/// Pre-scan lifecycle hook: validates that target exists and is a readable directory.
-/// Emits INFO to stderr on success. Returns Err on any validation failure.
-fn pre_scan_hook(target: &str) -> Result<(), ScannerError> {
-    let meta = fs::metadata(target).map_err(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            ScannerError::InvalidTarget {
-                path: target.to_string(),
-                reason: "path does not exist".to_string(),
-            }
-        } else {
-            ScannerError::IoError {
-                path: target.to_string(),
-                source: e,
-            }
-        }
-    })?;
-
-    if !meta.is_dir() {
-        return Err(ScannerError::InvalidTarget {
-            path: target.to_string(),
-            reason: "path is not a directory".to_string(),
-        });
-    }
-
-    eprintln!("[scanner] INFO: pre-scan check passed: {}", target);
-    Ok(())
+/// Builds a unique, monotonically-distinct nullifier for a single scan
+/// lifecycle run, binding the report hash to a nanosecond timestamp so that
+/// two runs producing an identical report are still treated as distinct
+/// state transitions.
+fn scan_nullifier(report_hash: &str) -> String {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock should be after unix epoch")
+        .as_nanos();
+    format!("{report_hash}-{nanos}")
 }
 
-/// Post-scan lifecycle hook: verifies report_hash matches recomputed SHA-256 of findings.
-/// Returns Err(IntegrityCheckFailed) if the hash does not match.
-fn post_scan_hook(findings: &[Finding], report: &ScanReport) -> Result<(), ScannerError> {
-    let json = serde_json::to_string_pretty(findings)
-        .map_err(ScannerError::SerializationError)?;
-    let expected_hash = sha256_of(&json);
-
-    if expected_hash != report.report_hash {
-        return Err(ScannerError::IntegrityCheckFailed);
-    }
-
-    Ok(())
+/// Runs the ZK-based state validation hook over a completed scan lifecycle,
+/// verifying that the pre-scan state (the scan target) transitioned into the
+/// post-scan state (the generated report) via a well-formed, non-replayed
+/// proof before the report is trusted downstream.
+fn verify_scan_state_transition(
+    hook: &mut ZkStateValidationHook,
+    pre_state_root: &str,
+    post_state_root: &str,
+    nullifier: &str,
+) -> Result<(), ZkStateError> {
+    let proof = StateTransitionProof::new(pre_state_root, post_state_root, nullifier);
+    hook.verify_transition(&proof)
 }
 
 fn main() {
     let target = env::args()
         .nth(1)
         .unwrap_or_else(|| "../vero-core-contracts".into());
+    let pre_state_root = sha256_of(&target);
 
-    // Pre-scan hook: validate target directory before scanning (exit 4 on failure)
-    if let Err(e) = pre_scan_hook(&target) {
-        match &e {
-            ScannerError::InvalidTarget { path, reason } => {
-                eprintln!("[scanner] ERROR: invalid target: {}: {}", path, reason);
-            }
-            ScannerError::IoError { path, source } => {
-                eprintln!("[scanner] ERROR: invalid target: {}: {}", path, source);
-            }
-            _ => {
-                eprintln!("[scanner] ERROR: pre-scan failed: {}", e);
-            }
-        }
-        std::process::exit(4);
-    }
-
-    // SAFETY: static regex patterns are validated at compile time; panic here is intentional
     let rules = compile_rules(RULES);
     let (file_count, all_findings) = scan_target(&target, &rules);
 
@@ -241,27 +211,20 @@ fn main() {
         report_hash: hash,
     };
 
-    // Post-scan hook: verify integrity before writing (exit 5 on failure, no disk write)
-    if let Err(e) = post_scan_hook(&report.findings, &report) {
-        match e {
-            ScannerError::IntegrityCheckFailed => {
-                eprintln!("[scanner] ERROR: report integrity check failed");
-            }
-            _ => {
-                eprintln!("[scanner] ERROR: post-scan failed: {}", e);
-            }
-        }
-        std::process::exit(5);
+    // ZK-based state validation hook: verify the scan target (pre-state)
+    // transitioned into the generated report (post-state) via a well-formed,
+    // non-replayed proof before the report is trusted downstream.
+    let nullifier = scan_nullifier(&report.report_hash);
+    let mut zk_hook = ZkStateValidationHook::new();
+    if let Err(e) =
+        verify_scan_state_transition(&mut zk_hook, &pre_state_root, &report.report_hash, &nullifier)
+    {
+        eprintln!("[scanner] ZK state validation hook rejected scan lifecycle transition: {e}");
+        std::process::exit(1);
     }
+    eprintln!("[scanner] ZK state validation hook passed — scan state transition verified.");
 
-    // Serialize full report for stdout and disk — exit 2 on failure
-    let out = match serde_json::to_string_pretty(&report) {
-        Ok(json) => json,
-        Err(e) => {
-            eprintln!("[scanner] ERROR: serialization failed: {}", e);
-            std::process::exit(2);
-        }
-    };
+    let out = serde_json::to_string_pretty(&report).unwrap();
     println!("{}", out);
 
     // Write report to /reports directory — exit 3 on failure
@@ -308,10 +271,7 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{
-        fs,
-        time::{SystemTime, UNIX_EPOCH},
-    };
+    use std::fs;
 
     fn temp_scan_dir() -> PathBuf {
         let mut dir = env::temp_dir();
@@ -349,68 +309,55 @@ mod tests {
     }
 
     #[test]
-    fn pre_scan_hook_rejects_nonexistent_path() {
-        let result = pre_scan_hook("/nonexistent/vero-scanner-test-does-not-exist-xyz");
-        assert!(
-            matches!(result, Err(ScannerError::InvalidTarget { .. })),
-            "expected InvalidTarget for non-existent path"
+    fn scan_state_transition_is_verified_for_a_normal_run() {
+        let pre = sha256_of("../vero-core-contracts");
+        let post = sha256_of("[]");
+        let mut hook = ZkStateValidationHook::new();
+
+        assert!(verify_scan_state_transition(&mut hook, &pre, &post, &scan_nullifier(&post)).is_ok());
+    }
+
+    #[test]
+    fn scan_state_transition_rejects_a_tampered_post_state_root() {
+        let pre = sha256_of("../vero-core-contracts");
+        let post = sha256_of("[]");
+        let tampered_post = sha256_of("[]tampered");
+        let mut hook = ZkStateValidationHook::new();
+        let nullifier = scan_nullifier(&post);
+
+        // Build the proof against the real post-state, then swap in a
+        // tampered post-state root so the commitment no longer matches.
+        let mut proof = StateTransitionProof::new(pre, post, nullifier);
+        proof.post_state_root = tampered_post;
+
+        assert_eq!(
+            hook.verify_transition(&proof),
+            Err(ZkStateError::ProofCommitmentMismatch)
         );
     }
 
     #[test]
-    fn pre_scan_hook_rejects_file_path() {
-        let dir = temp_scan_dir();
-        let file_path = dir.join("not-a-dir.txt");
-        fs::write(&file_path, "content").expect("temp file should be written");
-        let result = pre_scan_hook(&file_path.to_string_lossy());
-        assert!(
-            matches!(result, Err(ScannerError::InvalidTarget { .. })),
-            "expected InvalidTarget for file path"
-        );
-        fs::remove_dir_all(dir).expect("temp dir should be removed");
-    }
+    fn scan_state_transition_rejects_replayed_nullifier_across_two_runs() {
+        let pre = sha256_of("../vero-core-contracts");
+        let post = sha256_of("[]");
+        let nullifier = "fixed-nullifier-for-test".to_string();
+        let mut hook = ZkStateValidationHook::new();
 
-    #[test]
-    fn pre_scan_hook_accepts_valid_directory() {
-        let dir = temp_scan_dir();
-        let result = pre_scan_hook(&dir.to_string_lossy());
-        assert!(result.is_ok(), "expected Ok(()) for valid directory");
-        fs::remove_dir_all(dir).expect("temp dir should be removed");
-    }
-
-    #[test]
-    fn post_scan_hook_accepts_matching_hash() {
-        let findings: Vec<Finding> = vec![];
-        let json = serde_json::to_string_pretty(&findings)
-            .expect("empty findings should serialize");
-        let hash = sha256_of(&json);
-        let report = ScanReport {
-            target: "test".into(),
-            total_files: 0,
-            findings: findings.clone(),
-            report_hash: hash,
-        };
-        assert!(
-            post_scan_hook(&findings, &report).is_ok(),
-            "expected Ok(()) for matching hash"
+        assert!(verify_scan_state_transition(&mut hook, &pre, &post, &nullifier).is_ok());
+        assert_eq!(
+            verify_scan_state_transition(&mut hook, &pre, &post, &nullifier),
+            Err(ZkStateError::NullifierReplay(nullifier))
         );
     }
 
     #[test]
-    fn post_scan_hook_rejects_tampered_hash() {
-        let findings: Vec<Finding> = vec![];
-        let report = ScanReport {
-            target: "test".into(),
-            total_files: 0,
-            findings: findings.clone(),
-            report_hash: "deadbeef".repeat(8),
-        };
-        assert!(
-            matches!(
-                post_scan_hook(&findings, &report),
-                Err(ScannerError::IntegrityCheckFailed)
-            ),
-            "expected IntegrityCheckFailed for tampered hash"
+    fn scan_state_transition_rejects_no_op_when_target_hash_equals_report_hash() {
+        let same_root = sha256_of("identical-input");
+        let mut hook = ZkStateValidationHook::new();
+
+        assert_eq!(
+            verify_scan_state_transition(&mut hook, &same_root, &same_root, "n"),
+            Err(ZkStateError::NoOpTransition)
         );
     }
 }

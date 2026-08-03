@@ -9,6 +9,7 @@ module.exports = {
     "!src/**/*.d.ts",
     "!src/**/*.test.ts",
     "!src/cli.ts",
+    "!src/policy-bundle-cli.ts",
   ],
   coverageThreshold: {
     global: {
