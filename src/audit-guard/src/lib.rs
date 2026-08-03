@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 pub mod drift_validator;
 pub mod drift_error;
+pub mod write_path;
 
 use wasm_bindgen::prelude::*;
 use serde_json::Value as JsonValue;
@@ -106,6 +107,15 @@ pub enum AuditGuardError {
 
     #[error("Request {request_id} expired at {expired_at}")]
     RequestExpired { request_id: String, expired_at: u64 },
+
+    #[error("Cancellation reason must be at least 5 characters")]
+    InvalidCancellationReason,
+
+    #[error("State integrity violation for request {request_id}: {detail}")]
+    StateIntegrityViolation { request_id: String, detail: String },
+
+    #[error("Invalid report ID: {0}")]
+    InvalidReportId(String),
 }
 
 pub mod hot_reload;
@@ -266,13 +276,21 @@ pub struct SecureTreasuryOutflowTimeLock {
 }
 
 /// TreasuryOutflowStatus enum used throughout the time‑lock logic
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 enum TreasuryOutflowStatus {
     Pending,
     Ready,
     Executed,
     Cancelled,
     Expired,
+}
+
+/// Result of a full state-integrity sweep over all scheduled outflows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TimeLockVerificationReport {
+    pub checked_requests: usize,
+    pub ready_requests: usize,
+    pub expired_requests: usize,
 }
 
 fn validate_url(url: &str) -> Result<(), AuditGuardError> {
@@ -300,6 +318,13 @@ impl AuditGuardClient {
         let parsed_url = Url::parse(api_url)
             .map_err(|error| AuditGuardError::InvalidApiUrl(error.to_string()))?;
 
+        if parsed_url.scheme() != "http" && parsed_url.scheme() != "https" {
+            return Err(AuditGuardError::InvalidApiUrl(format!(
+                "unsupported scheme: {}",
+                parsed_url.scheme()
+            )));
+        }
+
         Ok(Self {
             client: Client::new(),
             api_url: parsed_url,
@@ -315,9 +340,11 @@ impl AuditGuardClient {
     /// Creates a new AuditGuardClient and validates the URL immediately
     pub fn new_validated(api_url: &str) -> Result<Self, AuditGuardError> {
         validate_url(api_url)?;
+        let parsed = Url::parse(api_url)
+            .map_err(|error| AuditGuardError::InvalidUrlFormat(error.to_string()))?;
         Ok(Self {
             client: Client::new(),
-            api_url: api_url.to_string(),
+            api_url: parsed,
         })
     }
 
@@ -325,7 +352,7 @@ impl AuditGuardClient {
     /// This adheres to Rust safety standards by avoiding raw pointers,
     /// using safe abstractions, and properly propagating errors.
     pub async fn submit_report(&self, report: &AuditReport) -> Result<(), AuditGuardError> {
-        validate_url(&self.api_url)?;
+        validate_url(self.api_url.as_str())?;
         report.validate()?;
         
         let endpoint = format!("{}/api/v1/audit/reports", self.api_url);
@@ -340,26 +367,18 @@ impl AuditGuardClient {
         } else {
             Err(AuditGuardError::ApiFailure { status: response.status() })
         }
-        let endpoint = format!("{}/api/v1/audit/reports", self.api_url);
-
-        let response = self.client.post(&endpoint).json(report).send().await?;
-
-        response
-            .error_for_status()
-            .map(|_| ())
-            .map_err(|error| match error.status() {
-                Some(status) => AuditGuardError::ApiStatus(status),
-                None => AuditGuardError::Request(error),
-            })
     }
 
     /// Fetches a specific audit report
     pub async fn get_report(&self, id: &str) -> Result<AuditReport, AuditGuardError> {
-        validate_url(&self.api_url)?;
+        validate_url(self.api_url.as_str())?;
         if id.trim().is_empty() {
             return Err(AuditGuardError::InvalidUrlFormat("Empty report ID".to_string()));
         }
-        
+        if id.contains('/') || id.contains("..") {
+            return Err(AuditGuardError::InvalidReportId(id.to_string()));
+        }
+
         let endpoint = format!("{}/api/v1/audit/reports/{}", self.api_url, id);
 
         let report: AuditReport = self.client.get(&endpoint)
@@ -381,7 +400,7 @@ impl AuditGuardClient {
         &self,
         alert: &AnomalyAlert,
     ) -> Result<(), AuditGuardError> {
-        validate_url(&self.api_url)?;
+        validate_url(self.api_url.as_str())?;
         alert.validate()?;
 
         let endpoint = format!("{}/api/v1/anomaly/alerts", self.api_url);
@@ -735,15 +754,15 @@ mod tests {
 
     #[test]
     fn confirmed_record_is_serializable() {
-        let record = ConfirmedAuditRecord {
+        let record = crate::write_path::ConfirmedAuditRecord {
             record_id: "test-policy-1".into(),
             observed_at: "2026-07-19T00:00:00Z".into(),
             evidence_hash: "0".repeat(64),
-            payload: json!({ "policy": "test", "confirmed": true }),
+            payload: serde_json::json!({ "policy": "test", "confirmed": true }),
         };
-        assert_eq!(report.policy_name, "test-policy");
-        assert!(report.compliant);
-        assert!(report.validate().is_ok());
+        let serialized =
+            serde_json::to_string(&record).expect("ConfirmedAuditRecord should serialize");
+        assert!(serialized.contains("test-policy-1"));
     }
 
     #[test]
@@ -964,7 +983,7 @@ mod tests {
     fn rejects_invalid_api_urls() {
         assert!(matches!(
             AuditGuardClient::new("localhost:8080"),
-            Err(AuditGuardError::InvalidApiUrl)
+            Err(AuditGuardError::InvalidApiUrl(_))
         ));
     }
 
@@ -979,11 +998,11 @@ mod tests {
 
         assert!(matches!(
             client.submit_report(&report).await,
-            Err(AuditGuardError::InvalidReport)
+            Err(AuditGuardError::EmptyPolicyName)
         ));
         assert!(matches!(
             client.get_report("../etc/passwd").await,
-            Err(AuditGuardError::InvalidReportId)
+            Err(AuditGuardError::InvalidReportId(_))
         ));
     }
 }

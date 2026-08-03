@@ -11,10 +11,7 @@ serde_json = "1"
 walkdir = "2"
 regex = "1"
 rayon = "1"
-
-# RUSTSEC-2026-0204: pin crossbeam-epoch away from vulnerable 0.9.18;
-# rayon pulls this in transitively via rayon-core -> crossbeam-deque.
-crossbeam-epoch = "0.9.20"
+audit_guard = { package = "audit-guard", path = "../src/audit-guard" }
 
 # RUSTSEC-2026-0204: pin crossbeam-epoch away from vulnerable 0.9.18;
 # rayon pulls this in transitively via rayon-core -> crossbeam-deque.
