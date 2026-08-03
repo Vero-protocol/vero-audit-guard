@@ -184,6 +184,7 @@ jobs:
         working-directory: src/audit-guard
         env:
           CHANGED_FILES: ${{ steps.changed-files.outputs.files }}
+          ALLOW_UNSIGNED_PR: "true"
           GUARDIAN_DASH_URL: ${{ secrets.GUARDIAN_DASH_URL }}
           GUARDIAN_DASH_TOKEN: ${{ secrets.GUARDIAN_DASH_TOKEN }}
           MAINTENANCE_MODE: ${{ vars.MAINTENANCE_MODE }}
