@@ -52,7 +52,7 @@ fn compile_governance_rules() -> MultisigResult<Vec<CompiledGovernanceRule>> {
             "Withdrawal function lacks explicit multi-sig authorization check",
         ),
         (
-            r"threshold\s*=\s*1\b|threshold\s*=\s*1u32|M\s*=\s*1\b|N\s*=\s*1\b",
+            r"(?i)\bthreshold\b(\s*:\s*\w+)?\s*=\s*1(u32)?\b|\b[mn]\s*=\s*1(u32)?\b",
             "WEAK_THRESHOLD",
             "HIGH",
             "Multi-sig threshold is set to 1, effectively disabling multi-sig protection",
@@ -359,8 +359,7 @@ mod tests {
 
     #[test]
     fn scan_findings_include_line_numbers() {
-        let source = r#"
-            line 1: safe
+        let source = r#"line 1: safe
             line 2: pub fn withdraw() { transfer(); }
             line 3: safe
         "#;
