@@ -9,6 +9,7 @@ module.exports = {
     "!src/**/*.d.ts",
     "!src/**/*.test.ts",
     "!src/cli.ts",
+    "!src/policy-bundle-cli.ts",
   ],
   coverageThreshold: {
     global: {
@@ -16,6 +17,9 @@ module.exports = {
       functions: 70,
       lines: 70,
       statements: 70,
+    },
+    "./src/batch-contract-call-processor.ts": {
+      statements: 80,
     },
   },
 };

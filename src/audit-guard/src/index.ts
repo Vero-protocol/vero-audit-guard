@@ -65,6 +65,15 @@ export type {
   RelayerStateSeverity
 } from "./relayer-state-validator";
 
+// Issue #160: Batch contract call processor
+export { default as BatchContractCallProcessor } from "./batch-contract-call-processor";
+export type {
+  ContractCallDescriptor,
+  BatchProcessorOptions,
+  BatchEntryResult,
+  BatchResult,
+} from "./batch-contract-call-processor";
+
 // Issue #166: Emergency recovery & exit for vero-core-engine control plane
 export { default as EmergencyExitEngine, buildSignedAuth, canonicalPayload, computeReceiptId, safeAdd, safeSub, DEFAULT_AUTH_WINDOW_MS, U64_MAX } from "./core/emergency-exit";
 export type {
@@ -77,6 +86,24 @@ export type {
   WithdrawalResult,
   EmergencyExitOptions,
 } from "./core/emergency-exit";
+
+// Issue VAG-010: Admin Multi-Sig Webhook Notification Channel
+export { default as MultisigWebhookNotifier, computeHmacSignature } from "./multisig-webhook-notifier";
+export type {
+  CriticalAnomalyInput,
+  WebhookNotifyResult,
+  EndpointDeliveryResult,
+  MultisigWebhookNotifierConfig,
+  WebhookDeliveryError,
+} from "./multisig-webhook-notifier";
+export {
+  WebhookNotificationError,
+  WebhookConfigurationError,
+  WebhookPayloadSerializationError,
+  WebhookNon2xxResponseError,
+  WebhookTimeoutError,
+  WebhookNetworkError,
+} from "./multisig-webhook-notifier";
 
 // Issue VAG-009: Anomaly Alert Dispatcher — Dashboard Channel
 export { default as AnomalyAlertDispatcher } from "./anomaly-alert-dispatcher";

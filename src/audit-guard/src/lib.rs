@@ -1,9 +1,43 @@
+use std::collections::BTreeMap;
 use reqwest::{Client, StatusCode, Url};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+pub mod drift_validator;
+pub mod drift_error;
+pub mod write_path;
+
+use wasm_bindgen::prelude::*;
+use serde_json::Value as JsonValue;
+
+#[wasm_bindgen]
+pub fn validate_drift_js(event: JsValue) -> Result<(), JsValue> {
+    // Deserialize the incoming JS value into the Rust DriftEvent struct
+    let dr_event: drift_validator::DriftEvent = event.into_serde().map_err(|e| JsValue::from_str(&e.to_string()))?;
+    // Run the core validation logic
+    match drift_validator::validate_drift(&dr_event) {
+        Ok(()) => Ok(()),
+        Err(err) => Err(JsValue::from_str(&err.to_string())),
+    }
+}
+
+pub mod zk_state_validator;
+pub use zk_state_validator::{
+    compute_commitment, StateTransitionProof, ZkStateError, ZkStateValidationHook,
+};
+pub mod telemetry_queue;
+pub mod drift_consumer;
 
 #[derive(Error, Debug)]
 pub enum AuditGuardError {
+    #[error("API URL cannot be empty")]
+    EmptyApiUrl,
+
+    #[error("Invalid API URL: {0}")]
+    InvalidApiUrl(String),
+
+    #[error("Invalid endpoint: {0}")]
+    InvalidEndpoint(String),
+
     #[error("API URL cannot be empty")]
     EmptyUrl,
 
@@ -38,6 +72,12 @@ pub enum AuditGuardError {
     #[error("Dashboard channel unavailable: {reason}")]
     DashboardChannelUnavailable { reason: String },
 
+    #[error("Invalid drift event payload: {reason}")]
+    InvalidDriftPayload { reason: String },
+
+    #[error("Drift processing failed: {reason}")]
+    DriftProcessingFailed { reason: String },
+
     #[error("Invalid anomaly alert payload: {reason}")]
     InvalidAnomalyPayload { reason: String },
 
@@ -46,9 +86,39 @@ pub enum AuditGuardError {
         attempts: u32,
         last_error: String,
     },
+
+    #[error("Duplicate request ID: {request_id}")]
+    DuplicateRequestId { request_id: String },
+
+    #[error("Too many pending requests: {limit}")]
+    TooManyPendingRequests { limit: usize },
+
+    #[error("Unknown request ID: {request_id}")]
+    UnknownRequest { request_id: String },
+
+    #[error("Request {request_id} still locked until {unlock_at}")]
+    RequestStillLocked { request_id: String, unlock_at: u64 },
+
+    #[error("Request {request_id} already executed at {executed_at}")]
+    RequestAlreadyExecuted { request_id: String, executed_at: u64 },
+
+    #[error("Request {request_id} already cancelled at {cancelled_at}")]
+    RequestAlreadyCancelled { request_id: String, cancelled_at: u64 },
+
+    #[error("Request {request_id} expired at {expired_at}")]
+    RequestExpired { request_id: String, expired_at: u64 },
+
+    #[error("Cancellation reason must be at least 5 characters")]
+    InvalidCancellationReason,
+
+    #[error("State integrity violation for request {request_id}: {detail}")]
+    StateIntegrityViolation { request_id: String, detail: String },
+
+    #[error("Invalid report ID: {0}")]
+    InvalidReportId(String),
 }
 
-pub type AuditGuardResult<T> = Result<T, AuditGuardError>;
+pub mod hot_reload;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AuditReport {
@@ -141,9 +211,85 @@ pub struct AuditGuardClient {
     api_url: Url,
 }
 
+/// Configuration for the treasury outflow time lock.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TreasuryOutflowTimeLockConfig {
+    pub min_delay_secs: u64,
+    pub max_delay_secs: u64,
+    pub max_amount: u64,
+    pub grace_period_secs: u64,
+    pub max_pending_requests: usize,
+}
+
+impl TreasuryOutflowTimeLockConfig {
+    pub fn validate(&self) -> Result<(), AuditGuardError> {
+        if self.min_delay_secs > self.max_delay_secs {
+            return Err(AuditGuardError::InvalidUrlFormat("min_delay_secs > max_delay_secs".to_string()));
+        }
+        if self.max_amount == 0 {
+            return Err(AuditGuardError::InvalidUrlFormat("max_amount must be > 0".to_string()));
+        }
+        Ok(())
+    }
+}
+
+/// A request to outflow treasury funds.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TreasuryOutflowRequest {
+    pub request_id: String,
+    pub treasury_id: String,
+    pub beneficiary: String,
+    pub amount: u64,
+    pub created_at: u64,
+    pub execute_after: u64,
+    pub justification: String,
+}
+
+impl TreasuryOutflowRequest {
+    pub fn validate(&self, config: &TreasuryOutflowTimeLockConfig) -> Result<(), AuditGuardError> {
+        if self.amount > config.max_amount {
+            return Err(AuditGuardError::InvalidUrlFormat("amount exceeds max_amount".to_string()));
+        }
+        let delay = self.execute_after.saturating_sub(self.created_at);
+        if delay < config.min_delay_secs || delay > config.max_delay_secs {
+            return Err(AuditGuardError::InvalidUrlFormat("delay out of bounds".to_string()));
+        }
+        Ok(())
+    }
+}
+
+/// Represents a scheduled treasury outflow.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScheduledTreasuryOutflow {
+    pub expires_at: u64,
+    pub request: TreasuryOutflowRequest,
+    pub status: TreasuryOutflowStatus,
+    pub executed_at: Option<u64>,
+    pub cancelled_at: Option<u64>,
+    pub cancellation_reason: Option<String>,
+}
+
 pub struct SecureTreasuryOutflowTimeLock {
     config: TreasuryOutflowTimeLockConfig,
     requests: BTreeMap<String, ScheduledTreasuryOutflow>,
+}
+
+/// TreasuryOutflowStatus enum used throughout the time‑lock logic
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+enum TreasuryOutflowStatus {
+    Pending,
+    Ready,
+    Executed,
+    Cancelled,
+    Expired,
+}
+
+/// Result of a full state-integrity sweep over all scheduled outflows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TimeLockVerificationReport {
+    pub checked_requests: usize,
+    pub ready_requests: usize,
+    pub expired_requests: usize,
 }
 
 fn validate_url(url: &str) -> Result<(), AuditGuardError> {
@@ -171,6 +317,13 @@ impl AuditGuardClient {
         let parsed_url = Url::parse(api_url)
             .map_err(|error| AuditGuardError::InvalidApiUrl(error.to_string()))?;
 
+        if parsed_url.scheme() != "http" && parsed_url.scheme() != "https" {
+            return Err(AuditGuardError::InvalidApiUrl(format!(
+                "unsupported scheme: {}",
+                parsed_url.scheme()
+            )));
+        }
+
         Ok(Self {
             client: Client::new(),
             api_url: parsed_url,
@@ -185,14 +338,19 @@ impl AuditGuardClient {
 
     pub fn new_validated(api_url: &str) -> Result<Self, AuditGuardError> {
         validate_url(api_url)?;
+        let parsed = Url::parse(api_url)
+            .map_err(|error| AuditGuardError::InvalidUrlFormat(error.to_string()))?;
         Ok(Self {
             client: Client::new(),
-            api_url: api_url.to_string(),
+            api_url: parsed,
         })
     }
 
-    pub async fn submit_report(&self, report: &AuditReport) -> AuditGuardResult<()> {
-        validate_url(&self.api_url)?;
+    /// Submits an audit report to the API
+    /// This adheres to Rust safety standards by avoiding raw pointers,
+    /// using safe abstractions, and properly propagating errors.
+    pub async fn submit_report(&self, report: &AuditReport) -> Result<(), AuditGuardError> {
+        validate_url(self.api_url.as_str())?;
         report.validate()?;
 
         let endpoint = format!("{}/api/v1/audit/reports", self.api_url);
@@ -209,10 +367,14 @@ impl AuditGuardClient {
         }
     }
 
-    pub async fn get_report(&self, id: &str) -> AuditGuardResult<AuditReport> {
-        validate_url(&self.api_url)?;
+    /// Fetches a specific audit report
+    pub async fn get_report(&self, id: &str) -> Result<AuditReport, AuditGuardError> {
+        validate_url(self.api_url.as_str())?;
         if id.trim().is_empty() {
             return Err(AuditGuardError::InvalidReport("report id must not be empty".into()));
+        }
+        if id.contains('/') || id.contains("..") {
+            return Err(AuditGuardError::InvalidReportId(id.to_string()));
         }
 
         let endpoint = format!("{}/api/v1/audit/reports/{}", self.api_url, id);
@@ -236,7 +398,7 @@ impl AuditGuardClient {
         &self,
         alert: &AnomalyAlert,
     ) -> Result<(), AuditGuardError> {
-        validate_url(&self.api_url)?;
+        validate_url(self.api_url.as_str())?;
         alert.validate()?;
 
         let endpoint = format!("{}/api/v1/anomaly/alerts", self.api_url);
@@ -590,15 +752,15 @@ mod tests {
 
     #[test]
     fn confirmed_record_is_serializable() {
-        let record = ConfirmedAuditRecord {
+        let record = crate::write_path::ConfirmedAuditRecord {
             record_id: "test-policy-1".into(),
             observed_at: "2026-07-19T00:00:00Z".into(),
             evidence_hash: "0".repeat(64),
-            payload: json!({ "policy": "test", "confirmed": true }),
+            payload: serde_json::json!({ "policy": "test", "confirmed": true }),
         };
-        assert_eq!(report.policy_name, "test-policy");
-        assert!(report.compliant);
-        assert!(report.validate().is_ok());
+        let serialized =
+            serde_json::to_string(&record).expect("ConfirmedAuditRecord should serialize");
+        assert!(serialized.contains("test-policy-1"));
     }
 
     #[test]
@@ -813,5 +975,32 @@ mod tests {
             err.to_string(),
             "Anomaly dispatch failed after 3 attempt(s): timeout"
         );
+    }
+
+    #[test]
+    fn rejects_invalid_api_urls() {
+        assert!(matches!(
+            AuditGuardClient::new("localhost:8080"),
+            Err(AuditGuardError::InvalidApiUrl(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn rejects_invalid_report_input() {
+        let client = AuditGuardClient::new("http://localhost:8080").unwrap();
+        let report = AuditReport {
+            policy_name: "  ".to_string(),
+            compliant: true,
+            violations: vec![],
+        };
+
+        assert!(matches!(
+            client.submit_report(&report).await,
+            Err(AuditGuardError::EmptyPolicyName)
+        ));
+        assert!(matches!(
+            client.get_report("../etc/passwd").await,
+            Err(AuditGuardError::InvalidReportId(_))
+        ));
     }
 }

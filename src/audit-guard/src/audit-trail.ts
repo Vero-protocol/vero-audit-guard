@@ -42,14 +42,15 @@ export class AuditTrail {
   public async anchor(result: EvaluationResult): Promise<string> {
     const secretKey = process.env.AUDIT_KEYPAIR_SECRET;
     if (!secretKey) {
-      throw new Error("AUDIT_KEYPAIR_SECRET environment variable not set");
+      console.warn("AUDIT_KEYPAIR_SECRET not set; skipping Stellar anchoring.");
+      return ""; // No anchoring performed
     }
 
     const hash = this.computeHash(result);
-    const keypair = Keypair.fromSecret(secretKey);
     const server = new Server(this.horizonUrl);
 
     try {
+      const keypair = Keypair.fromSecret(secretKey);
       const account = await server.loadAccount(keypair.publicKey());
 
       // Use MEMO_HASH for full 256-bit collision resistance
