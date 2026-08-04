@@ -141,7 +141,13 @@ pub enum AuditGuardError {
     AdversarialPayload(String),
 
     #[error("HTTP request failed: {0}")]
-    Reqwest(#[from] reqwest::Error),
+    Reqwest(String),
+}
+
+impl From<reqwest::Error> for AuditGuardError {
+    fn from(err: reqwest::Error) -> Self {
+        AuditGuardError::Reqwest(err.to_string())
+    }
 }
 
 pub mod hot_reload;
