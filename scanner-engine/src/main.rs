@@ -10,7 +10,9 @@ use std::{
 };
 use thiserror::Error;
 use walkdir::WalkDir;
-use multisig_scanner::{GovernanceFinding, MultisigScannerError, scan_multisig_governance};
+
+mod multisig_scanner;
+use multisig_scanner::{GovernanceFinding, scan_multisig_governance};
 
 #[derive(Serialize, Deserialize, Debug)]
 struct Finding {
@@ -155,6 +157,28 @@ fn scan_target(target: &str, rules: &[CompiledRule]) -> (usize, Vec<Finding>) {
     (readable_count, findings)
 }
 
+/// Scans every Rust source file under `target` for multisig/governance
+/// misconfigurations. Files that fail to read or fail governance analysis
+/// are skipped with a WARN, mirroring `scan_file`'s tolerance of unreadable
+/// files.
+fn scan_governance_target(target: &str) -> Vec<GovernanceFinding> {
+    rust_source_files(target)
+        .iter()
+        .filter_map(|path| {
+            let content = fs::read_to_string(path).ok()?;
+            let file = path.to_string_lossy().to_string();
+            match scan_multisig_governance(&content, &file) {
+                Ok(findings) => Some(findings),
+                Err(e) => {
+                    eprintln!("[scanner] WARN: governance scan skipped {}: {}", file, e);
+                    None
+                }
+            }
+        })
+        .flatten()
+        .collect()
+}
+
 fn sha256_of(data: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(data.as_bytes());
@@ -195,6 +219,7 @@ fn main() {
 
     let rules = compile_rules(RULES);
     let (file_count, all_findings) = scan_target(&target, &rules);
+    let governance_findings = scan_governance_target(&target);
 
     // Serialize findings — exit 2 on failure, nothing written to stdout
     let report_json = match serde_json::to_string_pretty(&all_findings) {
