@@ -58,6 +58,17 @@ cat reports/latest-scan.json
 
 Environment variables are documented in [`.env.example`](.env.example) and in the README "Environment Variables" table. Docker Compose reads a host `.env` for interpolation; do not commit secrets.
 
+### Package `.env.example` files
+
+Each package that reads environment variables keeps a local `.env.example` with safe placeholder values. Copy the relevant file to `.env` when running a package locally, then replace placeholder values with your own development configuration.
+
+- `anomaly-detector/.env.example` documents relayer metrics, RPC failover, threat feed, dashboard, and telemetry settings.
+- `atomic-rpc-relayer-bridge/.env.example` documents local server bind, bridge endpoint, relayer address, nonce, and failed-transaction sample settings.
+- `verifiable-audit-trail/.env.example` documents Stellar Horizon, network, and optional audit keypair settings.
+- `src/audit-guard/.env.example` documents webhook, dashboard, on-call, policy, CLI, archive, backup, Stellar, and telemetry settings.
+
+Never commit real secrets, API tokens, private keys, production endpoints that should remain private, or local `.env` files. When adding a new `process.env` or `import.meta.env` read, update the nearest package-level `.env.example` in the same change.
+
 ### Acceptance check
 
 `docker compose up --build` should:
