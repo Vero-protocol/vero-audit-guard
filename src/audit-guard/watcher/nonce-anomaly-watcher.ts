@@ -109,7 +109,7 @@ export class NonceAnomalyWatcher {
           state.maxDrift = Math.max(state.maxDrift, drift);
         }
       } catch (err) {
-        console.error([NonceWatcher] Sync failed for :, err);
+        console.error(`[NonceWatcher] Sync failed for ${accountId}:`, err);
       }
     }
   }
@@ -125,19 +125,14 @@ export class NonceAnomalyWatcher {
   /** Trigger alert via webhook and log immutably */
   private async triggerAlert(alert: NonceAnomalyAlert): Promise<void> {
     console.error(
-      [NonceWatcher] NONCE ANOMALY:  engine= chain= drift= severity=
+      `[NonceWatcher] NONCE ANOMALY: account=${alert.accountId} engine=${alert.engineNonce} chain=${alert.chainNonce} drift=${alert.drift} severity=${alert.severity}`
     );
 
     // Send webhook alert
     try {
       await sendAlert({
-        event: "nonce_anomaly",
-        accountId: alert.accountId,
-        drift: alert.drift,
-        severity: alert.severity,
-        engineNonce: alert.engineNonce,
-        chainNonce: alert.chainNonce,
-        ledgerNumber: alert.ledgerNumber,
+        repository: alert.accountId,
+        alert: `nonce_anomaly drift=${alert.drift} engine=${alert.engineNonce} chain=${alert.chainNonce} severity=${alert.severity} ledger=${alert.ledgerNumber}`,
         timestamp: new Date(alert.timestamp).toISOString(),
       });
     } catch (err) {
