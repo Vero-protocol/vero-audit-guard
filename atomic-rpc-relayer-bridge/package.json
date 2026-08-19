@@ -6,7 +6,9 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
+    "start:local": "node dist/local-server.js",
     "dev": "ts-node src/index.ts",
+    "dev:local": "ts-node src/local-server.ts",
     "test": "jest --passWithNoTests"
   },
   "dependencies": {

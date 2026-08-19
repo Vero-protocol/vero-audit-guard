@@ -1,0 +1,76 @@
+name: vero-audit-guard
+
+services:
+  scanner-engine:
+    build:
+      context: .
+      dockerfile: scanner-engine/Dockerfile
+    image: vero-audit-guard/scanner-engine:local
+    environment:
+      SCAN_TARGET: ${SCAN_TARGET:-/target}
+    volumes:
+      - ./reports:/app/reports
+      - ${SCAN_HOST_TARGET:-./docker/sample-target}:/target:ro
+    restart: "no"
+
+  atomic-rpc-relayer-bridge:
+    build:
+      context: ./atomic-rpc-relayer-bridge
+      dockerfile: Dockerfile
+    image: vero-audit-guard/atomic-rpc-relayer-bridge:local
+    environment:
+      PORT: ${BRIDGE_PORT:-8545}
+      RELAYER_ADDRESS: ${RELAYER_ADDRESS:-GLOCALDEVRELAYER}
+      INITIAL_NONCE: ${INITIAL_NONCE:-100}
+      INITIAL_FAILED_TX_COUNT: ${INITIAL_FAILED_TX_COUNT:-0}
+    ports:
+      - "${BRIDGE_PORT:-8545}:8545"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "require('http').get('http://127.0.0.1:8545/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 8
+      start_period: 5s
+    restart: unless-stopped
+
+  anomaly-detector:
+    build:
+      context: .
+      dockerfile: anomaly-detector/Dockerfile
+    image: vero-audit-guard/anomaly-detector:local
+    environment:
+      RELAYER_METRICS_URL: ${RELAYER_METRICS_URL:-http://atomic-rpc-relayer-bridge:8545/metrics}
+      AUTHORIZED_ADDRESSES: ${AUTHORIZED_ADDRESSES:-GLOCALDEVRELAYER}
+      NONCE_SPIKE_THRESHOLD: ${NONCE_SPIKE_THRESHOLD:-50}
+      FAILED_TX_THRESHOLD: ${FAILED_TX_THRESHOLD:-10}
+      POLL_INTERVAL_MS: ${POLL_INTERVAL_MS:-5000}
+      RPC_NODE_URLS: ${RPC_NODE_URLS:-}
+      THREAT_FEED_URLS: ${THREAT_FEED_URLS:-}
+      THREAT_FEED_URL: ${THREAT_FEED_URL:-}
+    depends_on:
+      atomic-rpc-relayer-bridge:
+        condition: service_healthy
+    restart: unless-stopped
+
+  verifiable-audit-trail:
+    build:
+      context: ./verifiable-audit-trail
+      dockerfile: Dockerfile
+    image: vero-audit-guard/verifiable-audit-trail:local
+    environment:
+      REPORTS_DIR: /reports
+      AUDIT_KEYPAIR_SECRET: ${AUDIT_KEYPAIR_SECRET:-}
+      STELLAR_NETWORK: ${STELLAR_NETWORK:-testnet}
+      HORIZON_URL: ${HORIZON_URL:-https://horizon-testnet.stellar.org}
+    volumes:
+      - ./reports:/reports:ro
+    depends_on:
+      scanner-engine:
+        condition: service_completed_successfully
+    restart: "no"
