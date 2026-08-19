@@ -1,0 +1,17 @@
+.git
+.github
+**/.git
+**/node_modules
+**/dist
+**/target
+**/coverage
+**/.env
+**/*.secret
+**/.oncall-state.json
+**/logs
+reports/*.json
+agent-transcripts
+.cursor
+*.md
+!README.md
+!CONTRIBUTING.md

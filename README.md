@@ -50,6 +50,7 @@
 |----------------------------|-----------|---------------------------------------------------|
 | `scanner-engine`           | Rust      | Static analysis of Soroban contracts              |
 | `anomaly-detector`         | TypeScript| Real-time relayer monitoring                      |
+| `atomic-rpc-relayer-bridge`| TypeScript| Local RPC/metrics bridge for the relayer pipeline |
 | `audit-guard`              | TypeScript| Policy as Code enforcement on GitHub PRs           |
 | `verifiable-audit-trail`   | TypeScript| On-chain report hash anchoring (Stellar)          |
 | `BUILD_GUARD.sh`           | Bash      | Local and CI orchestrator                         |
@@ -66,16 +67,25 @@ vero-audit-guard/
 │   ├── policies/pr_compliance.rego
 │   └── package.json
 ├── scanner-engine/          # Rust static analyzer
+│   ├── Dockerfile
 │   └── src/main.rs
 ├── anomaly-detector/        # TypeScript relayer monitor
+│   ├── Dockerfile
+│   └── src/index.ts
+├── atomic-rpc-relayer-bridge/  # Local RPC/metrics bridge
+│   ├── Dockerfile
 │   └── src/index.ts
 ├── verifiable-audit-trail/  # On-chain audit hash anchoring
+│   ├── Dockerfile
 │   └── src/index.ts
+├── docker/sample-target/    # Clean fixture scanned by compose
 ├── reports/                 # Generated scan reports (gitignored content)
+├── docker-compose.yml       # Local multi-service pipeline
 ├── .github/workflows/
 │   ├── security-scan.yml    # PR-gated CI pipeline
 │   └── policy-compliance.yml # OPA policy compliance checks
 ├── BUILD_GUARD.sh           # Local automation script
+├── CONTRIBUTING.md          # Contributor + compose workflow
 ├── POLICY_AS_CODE.md        # Policy engine documentation
 ├── INCIDENT_RESPONSE.md     # Emergency runbook
 └── VULNERABILITY_DISCLOSURE.md  # Bug bounty & reporting
@@ -105,6 +115,7 @@ See [`INCIDENT_RESPONSE.md`](INCIDENT_RESPONSE.md) for the full runbook.
 - Node.js ≥ 20
 - `cargo`, `npm`
 - `cargo-audit` (`cargo install cargo-audit --locked`)
+- Docker + Compose v2 (only required for the containerised pipeline)
 
 ### Run the Full Guard Locally
 
@@ -121,11 +132,48 @@ This will:
 5. Compute and optionally anchor report hashes on Stellar.
 6. Report the security health status.
 
+### Docker Compose (local multi-service pipeline)
+
+Docker Compose wires `scanner-engine`, `atomic-rpc-relayer-bridge`, `anomaly-detector`, and `verifiable-audit-trail` so you can exercise the full local pipeline without installing Rust/Node toolchains on the host.
+
+**Prerequisites:** Docker Engine with Compose v2.
+
+```bash
+cp .env.example .env   # optional — defaults work for a dry-run
+docker compose up --build
+```
+
+What comes up:
+
+| Service | Role in compose | Lifetime |
+|---------|-----------------|----------|
+| `scanner-engine` | Static-analysis against `./docker/sample-target` (override with `SCAN_HOST_TARGET`) | One-shot; writes `reports/latest-scan.json` |
+| `verifiable-audit-trail` | SHA-256 of reports; Stellar anchor when `AUDIT_KEYPAIR_SECRET` is set | One-shot after the scanner succeeds |
+| `atomic-rpc-relayer-bridge` | Local HTTP metrics server (`GET /metrics`, `GET /health`) | Long-running on port `8545` |
+| `anomaly-detector` | Polls the bridge metrics URL and emits anomaly alerts | Long-running |
+
+Useful commands:
+
+```bash
+# Follow logs for the long-running monitor
+docker compose up anomaly-detector atomic-rpc-relayer-bridge
+
+# Scan a local checkout of vero-core-contracts instead of the sample target
+SCAN_HOST_TARGET=/path/to/vero-core-contracts docker compose up scanner-engine verifiable-audit-trail
+
+# Tear down containers (bind-mounted ./reports is kept)
+docker compose down
+```
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the compose workflow, environment variables, and service ports.
+
 ### Environment Variables
 
 | Variable                 | Component            | Description                                    |
 |--------------------------|----------------------|------------------------------------------------|
 | `AUDIT_KEYPAIR_SECRET`   | audit-trail          | Stellar secret key for on-chain anchoring      |
+| `SCAN_HOST_TARGET`       | scanner-engine       | Host path mounted as the scan target (compose)     |
+| `BRIDGE_PORT`            | rpc-relayer-bridge   | Host port for the local metrics server (default 8545) |
 | `RELAYER_METRICS_URL`    | anomaly-detector     | HTTP endpoint exposing relayer metrics JSON    |
 | `AUTHORIZED_ADDRESSES`   | anomaly-detector     | Comma-separated list of allowed relayer addresses |
 | `NONCE_SPIKE_THRESHOLD`  | anomaly-detector     | Nonce delta threshold (default: 50)            |
