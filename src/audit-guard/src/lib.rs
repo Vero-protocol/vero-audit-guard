@@ -1035,6 +1035,5 @@ mod tests {
             client.get_report("../etc/passwd").await,
             Err(AuditGuardError::InvalidReportId(_))
         ));
->>>>>>> 69c9299498dfdb33ecf2d6485d0c012172f1df5a
     }
 }
