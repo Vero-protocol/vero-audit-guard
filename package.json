@@ -1,4 +1,15 @@
 {
+  "name": "vero-audit-guard",
+  "version": "0.1.0",
+  "description": "Automated security monitoring, formal static analysis, and an immutable on-chain audit trail for the Vero Protocol.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Vero-protocol/vero-audit-guard.git"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "devDependencies": {
     "@types/jest": "^30.0.0"
   }
