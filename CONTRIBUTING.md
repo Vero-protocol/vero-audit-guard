@@ -106,13 +106,42 @@ When submitting a pull request, please ensure that you update the `CHANGELOG.md`
 
 When a new version is released, the `[Unreleased]` changes will be moved to a specific version block by the maintainers.
 
+## Code Review & CODEOWNERS
+
+This repository uses a [`.github/CODEOWNERS`](.github/CODEOWNERS) file to define per-sub-package review ownership. When you open a pull request, GitHub automatically requests a review from the owner(s) of every path your PR touches — you do not need to assign reviewers manually.
+
+### How automatic review requests work
+
+GitHub's CODEOWNERS integration is activated by **branch protection rules** on `main`.  The rule that matters is **"Require review from Code Owners"** (found under *Settings → Branches → Branch protection rules → main*).  Once that setting is enabled:
+
+1. **Open a PR** against `main` (or any protected branch).
+2. GitHub inspects the diff and matches every changed path against `.github/CODEOWNERS`.
+3. The matching owner(s) are automatically added as required reviewers — the PR cannot be merged until at least one of them approves.
+4. If no specific rule matches, the global fallback owner (`@mimi-esc`) is requested.
+
+### Sub-package ownership at a glance
+
+| Path | Owners |
+|------|--------|
+| `scanner-engine/` | @mimi-esc @N-thnI @nazteeemba |
+| `anomaly-detector/` | @mimi-esc @N-thnI |
+| `atomic-rpc-relayer-bridge/` | @mimi-esc @telemarkdigital-publisher |
+| `verifiable-audit-trail/` | @mimi-esc @Errordog2 @gloskull |
+| `src/audit-guard/` | @mimi-esc @N-thnI @gloskull @Agbasimere |
+| `.github/` | @mimi-esc @N-thnI @gloskull |
+| Everything else | @mimi-esc |
+
+### Updating CODEOWNERS
+
+If you add a new top-level sub-package or significantly shift ownership of an existing one, open a PR that updates `.github/CODEOWNERS` alongside the code change. The `.github/` path itself is owned by the core infra maintainers, so the update will be reviewed by them automatically.
+
 ## Pull requests
 
 1. Branch from `main` using the issue naming convention when one is specified (for example `chore/issue-279-add-docker-compose-setup`).
 2. Keep changes scoped to the issue. Prefer additive tooling over drive-by refactors.
 3. Make sure new TypeScript compiles under `strict` and that package tests still pass (`npm test` / `cargo test` in the touched crate).
 4. Update `CHANGELOG.md` under `## [Unreleased]` with a clear, concise description of your change (see Changelog section above).
-5. Open the PR against `Vero-protocol/vero-audit-guard` and reference the issue (`Closes #279`).
+5. Open the PR against `Vero-protocol/vero-audit-guard` and reference the issue (`Closes #227`).
 6. Fill in the repository PR description completely — state what was completed from the issue.
 
 Do not commit `.env`, keypairs, or report JSON that may contain sensitive paths.

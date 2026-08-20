@@ -1,0 +1,42 @@
+# CODEOWNERS — vero-audit-guard
+#
+# GitHub automatically requests a review from the listed owners whenever a
+# pull request touches files under the matching path.  Rules are evaluated
+# top-to-bottom; the last matching rule wins.
+#
+# Ownership is based on commit history and sub-package responsibility.
+# The lead maintainer (@mimi-esc) is a global fallback for everything.
+#
+# Docs: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# ─── Global fallback ──────────────────────────────────────────────────────────
+# Any file not matched by a more-specific rule requests review from the lead
+# maintainer.
+*                                   @mimi-esc
+
+# ─── CI / GitHub Actions ──────────────────────────────────────────────────────
+# Workflow files and this CODEOWNERS file itself are owned by the core
+# infra maintainers.
+.github/                            @mimi-esc @N-thnI @gloskull
+
+# ─── scanner-engine (Rust static analyser) ────────────────────────────────────
+scanner-engine/                     @mimi-esc @N-thnI @nazteeemba
+
+# ─── anomaly-detector (TypeScript relayer monitor) ────────────────────────────
+anomaly-detector/                   @mimi-esc @N-thnI
+
+# ─── atomic-rpc-relayer-bridge (TypeScript RPC/metrics bridge) ────────────────
+atomic-rpc-relayer-bridge/          @mimi-esc @telemarkdigital-publisher
+
+# ─── verifiable-audit-trail (TypeScript on-chain hash anchoring) ──────────────
+verifiable-audit-trail/             @mimi-esc @Errordog2 @gloskull
+
+# ─── src/audit-guard (OPA policy engine) ──────────────────────────────────────
+src/audit-guard/                    @mimi-esc @N-thnI @gloskull @Agbasimere
+
+# ─── Root documentation & tooling ─────────────────────────────────────────────
+*.md                                @mimi-esc
+CHANGELOG.md                        @mimi-esc
+BUILD_GUARD.sh                      @mimi-esc @N-thnI
+docker-compose.yml                  @mimi-esc @N-thnI @gloskull
+docker/                             @mimi-esc @N-thnI
