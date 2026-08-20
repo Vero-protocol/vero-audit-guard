@@ -5,3 +5,5 @@ reports/*.json
 !reports/.gitkeep
 .env
 *.secret
+.oncall-state.json
+logs/

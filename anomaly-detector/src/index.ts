@@ -4,7 +4,111 @@
  *   - Nonce spike anomalies
  *   - Failed transaction bursts
  *   - Unauthorized address interactions
+ *   - Threat feed matches
+ *   - RPC node health
+ *
+ * VAG-012: Telemetry ingestion is protected by a token-bucket rate limiter and
+ * a bounded drop-oldest queue so that burst traffic cannot exhaust memory or
+ * delay anomaly processing.  This layer is STRICTLY OBSERVATIONAL — it has no
+ * authority to halt, pause, or block on-chain operations.
  */
+import * as fs from "fs";
+import { performance } from "perf_hooks";
+import { sendAlert } from "../../src/audit-guard/src/webhook";
+import * as path from "path";
+import {
+  TelemetryIngestionGuard,
+  TelemetryEvent,
+} from "../../src/audit-guard/src/telemetry-ingestion-guard";
+
+import { ThreatFeedFetcher } from "./audit-guard/threat-feed-fetcher";
+import { RpcFailoverMonitor } from "./rpc-failover-monitor";
+
+// ---------------------------------------------------------------------------
+// VAG-012: module-level ingestion guard — env-configurable, observational only
+// ---------------------------------------------------------------------------
+const metricsIngestionGuard = new TelemetryIngestionGuard({
+  bucketCapacity: Number(process.env["TELEMETRY_BUCKET_CAPACITY"] ?? 200),
+  refillRatePerSecond: Number(process.env["TELEMETRY_REFILL_RATE_PER_SEC"] ?? 100),
+  maxQueueDepth: Number(process.env["TELEMETRY_MAX_QUEUE_DEPTH"] ?? 1000),
+  sourceName: "anomaly-detector",
+});
+
+interface NodeStatus {
+  url: string;
+  healthy: boolean;
+  lastChecked: number;
+  responseTime?: number;
+}
+
+class NodeHealthChecker {
+  private nodes: NodeStatus[];
+  private currentNodeIndex: number;
+  private failoverCallbacks: Array<(oldUrl: string, newUrl: string) => void>;
+
+  constructor(nodeUrls: string[]) {
+    this.nodes = nodeUrls.map((url) => ({
+      url,
+      healthy: true,
+      lastChecked: Date.now(),
+    }));
+    this.currentNodeIndex = 0;
+    this.failoverCallbacks = [];
+  }
+
+  addFailoverCallback(callback: (oldUrl: string, newUrl: string) => void): void {
+    this.failoverCallbacks.push(callback);
+  }
+
+  getCurrentNode(): string {
+    return this.nodes[this.currentNodeIndex].url;
+  }
+
+  async checkHealth(): Promise<NodeStatus[]> {
+    const axios = await import("axios");
+    const results: NodeStatus[] = [];
+
+    for (let i = 0; i < this.nodes.length; i++) {
+      const node = this.nodes[i];
+      const startTime = performance.now();
+
+      try {
+        await axios.default.post(
+          node.url,
+          { jsonrpc: "2.0", method: "eth_blockNumber", params: [], id: 1 },
+          { timeout: 3000 }
+        );
+
+        node.healthy = true;
+        node.responseTime = performance.now() - startTime;
+      } catch {
+        node.healthy = false;
+        node.responseTime = undefined;
+      }
+
+      node.lastChecked = Date.now();
+      results.push({ ...node });
+    }
+
+    if (!this.nodes[this.currentNodeIndex].healthy) {
+      const newIndex = this.nodes.findIndex(
+        (n, idx) => idx !== this.currentNodeIndex && n.healthy
+      );
+
+      if (newIndex !== -1) {
+        const oldUrl = this.nodes[this.currentNodeIndex].url;
+        const newUrl = this.nodes[newIndex].url;
+        this.currentNodeIndex = newIndex;
+        this.failoverCallbacks.forEach((cb) => cb(oldUrl, newUrl));
+      }
+    }
+
+    return results;
+  }
+}
+
+export { metricsIngestionGuard };
+export const threatFetcher = new ThreatFeedFetcher();
 
 export interface RelayerMetrics {
   address: string;
@@ -14,9 +118,9 @@ export interface RelayerMetrics {
 }
 
 export interface AnomalyAlert {
-  type: "NONCE_SPIKE" | "FAILED_TX_BURST" | "UNAUTHORIZED_ADDRESS";
+  type: "NONCE_SPIKE" | "FAILED_TX_BURST" | "UNAUTHORIZED_ADDRESS" | "THREAT_FEED_MATCH" | "NONCE_REUSE" | "RELAYER_LATENCY_HIGH";
   severity: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
-  address: string;
+  address?: string;
   detail: string;
   timestamp: number;
 }
@@ -29,15 +133,93 @@ const NONCE_SPIKE_THRESHOLD = Number(process.env.NONCE_SPIKE_THRESHOLD ?? 50);
 const FAILED_TX_THRESHOLD = Number(process.env.FAILED_TX_THRESHOLD ?? 10);
 const POLL_INTERVAL_MS = Number(process.env.POLL_INTERVAL_MS ?? 5000);
 
-const previousNonces = new Map<string, number>();
+const RPC_NODE_URLS = (process.env.RPC_NODE_URLS ?? "").split(",").filter(Boolean);
+
+const nodeHealthChecker = RPC_NODE_URLS.length > 0
+  ? new NodeHealthChecker(RPC_NODE_URLS)
+  : null;
+
+const rpcFailoverMonitor = RPC_NODE_URLS.length > 0
+  ? new RpcFailoverMonitor()
+  : null;
+
+const DB_PATH = path.join(__dirname, "nonce-db.json");
+const previousNonces = new Map<string, number>(loadNonces());
 const alerts: AnomalyAlert[] = [];
+
+// Dashboard dispatch — lightweight inline bridge to avoid cross-package import issues.
+// The full AnomalyAlertDispatcher lives in src/audit-guard/src/anomaly-alert-dispatcher.ts
+// and is the canonical implementation for the audit-guard module.
+async function dispatchToDashboard(alert: AnomalyAlert): Promise<void> {
+  const dashUrl = process.env.GUARDIAN_DASH_URL;
+  if (!dashUrl) return;
+  const dashToken = process.env.GUARDIAN_DASH_TOKEN ?? "";
+  try {
+    const axios = await import("axios");
+    await axios.default.post(
+      dashUrl,
+      {
+        source: "anomaly-detector",
+        type: alert.type,
+        severity: alert.severity,
+        message: `[${alert.type}] ${alert.address} — ${alert.detail}`,
+        detail: alert.detail,
+        timestamp: new Date(alert.timestamp).toISOString(),
+        metadata: {
+          address: alert.address ?? null,
+          anomalyType: alert.type,
+          originalTimestamp: alert.timestamp,
+        },
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${dashToken}`,
+          "Content-Type": "application/json",
+        },
+        timeout: 5000,
+      }
+    );
+  } catch (err) {
+    console.error(
+      "[anomaly-detector] Dashboard dispatch failed:",
+      (err as Error).message
+    );
+  }
+}
+
+function loadNonces(): [string, number][] {
+  try {
+    const data = fs.readFileSync(DB_PATH, "utf-8");
+    const obj = JSON.parse(data) as Record<string, number>;
+    return Object.entries(obj);
+  } catch {
+    return [];
+  }
+}
+
+function saveNonces(): void {
+  const obj: Record<string, number> = {};
+  for (const [addr, nonce] of previousNonces.entries()) {
+    obj[addr] = nonce;
+  }
+  fs.writeFileSync(DB_PATH, JSON.stringify(obj, null, 2));
+}
 
 function analyze(metrics: RelayerMetrics[]): AnomalyAlert[] {
   const detected: AnomalyAlert[] = [];
 
   for (const m of metrics) {
-    // Nonce spike detection
     const prevNonce = previousNonces.get(m.address) ?? m.nonce;
+    // Nonce reuse detection
+    if (previousNonces.has(m.address) && m.nonce <= prevNonce) {
+      detected.push({
+        type: "NONCE_REUSE",
+        severity: "HIGH",
+        address: m.address,
+        detail: `Nonce reuse detected (prev: ${prevNonce}, now: ${m.nonce})`,
+        timestamp: m.timestamp,
+      });
+    }
     const nonceDelta = m.nonce - prevNonce;
     if (nonceDelta > NONCE_SPIKE_THRESHOLD) {
       detected.push({
@@ -71,9 +253,21 @@ function analyze(metrics: RelayerMetrics[]): AnomalyAlert[] {
         timestamp: m.timestamp,
       });
     }
+
+    // Threat feed match
+    if (threatFetcher.isThreat(m.address)) {
+      detected.push({
+        type: "THREAT_FEED_MATCH",
+        severity: "CRITICAL",
+        address: m.address,
+        detail: `Address matches active blocklist in threat feed (last updated: ${threatFetcher.getLastUpdated()?.toISOString() ?? "never"})`,
+        timestamp: m.timestamp,
+      });
+    }
   }
 
-  return detected;
+    saveNonces();
+    return detected;
 }
 
 async function fetchMetrics(): Promise<RelayerMetrics[]> {
@@ -89,6 +283,10 @@ function emit(alert: AnomalyAlert): void {
   alerts.push(alert);
   const line = `[ALERT][${alert.severity}][${alert.type}] ${alert.address} — ${alert.detail}`;
   console.error(line);
+  // Dispatch to Guardian Dashboard (non-blocking, observational-only)
+  dispatchToDashboard(alert).catch((err) => {
+    console.error("[anomaly-detector] Dashboard dispatch failed:", (err as Error).message);
+  });
   // In production: forward to PagerDuty / Slack webhook via env var ALERT_WEBHOOK_URL
 }
 
@@ -96,24 +294,134 @@ function emit(alert: AnomalyAlert): void {
 export function resetState(): void {
   previousNonces.clear();
   alerts.length = 0;
+  metricsIngestionGuard._reset();
 }
 
 export async function runOnce(metrics: RelayerMetrics[]): Promise<AnomalyAlert[]> {
-  const found = analyze(metrics);
+  // VAG-012: run each metrics item through the ingestion guard before
+  // processing.  Rate-limited or malformed items are surfaced as alerts and
+  // skipped — this is observational only and does NOT affect on-chain state.
+  const accepted: RelayerMetrics[] = [];
+  let rateLimitedCount = 0;
+  let malformedCount = 0;
+
+  for (const m of metrics) {
+    const event: TelemetryEvent = {
+      id: `${m.address}-${m.timestamp}`,
+      timestamp: new Date(m.timestamp).toISOString(),
+      payload: m,
+    };
+    const result = metricsIngestionGuard.ingest(event);
+    if (result.outcome === "ACCEPTED" || result.outcome === "QUEUE_FULL_DROP") {
+      accepted.push(m);
+    } else if (result.outcome === "RATE_LIMITED") {
+      rateLimitedCount += 1;
+    } else if (result.outcome === "MALFORMED") {
+      malformedCount += 1;
+    }
+  }
+
+  if (rateLimitedCount > 0) {
+    console.warn(
+      `[anomaly-detector][VAG-012] ${rateLimitedCount} metric(s) RATE_LIMITED at ingestion boundary — ` +
+        `tokens_remaining=${metricsIngestionGuard.tokensAvailable} queue=${metricsIngestionGuard.queueDepth}`
+    );
+  }
+  if (malformedCount > 0) {
+    console.error(
+      `[anomaly-detector][VAG-012] ${malformedCount} malformed metric event(s) rejected at ingestion boundary`
+    );
+  }
+
+  const found = analyze(accepted);
   found.forEach(emit);
   return found;
 }
 
 async function monitor(): Promise<void> {
   console.log("[anomaly-detector] Starting Vero Relayer monitor...");
-  setInterval(async () => {
-    try {
-      const metrics = await fetchMetrics();
-      await runOnce(metrics);
-    } catch (err) {
-      console.error("[anomaly-detector] Fetch error:", (err as Error).message);
-    }
-  }, POLL_INTERVAL_MS);
+  
+  try {
+    await threatFetcher.updateFeed();
+  } catch (err) {
+    console.error("[anomaly-detector] Initial threat feed update failed:", (err as Error).message);
+  }
+
+  if (nodeHealthChecker) {
+    nodeHealthChecker.addFailoverCallback((oldUrl, newUrl) => {
+      console.error(`[node-health] Failover triggered: ${oldUrl} → ${newUrl}`);
+      void sendAlert({
+        repository: "relayer",
+        alert: `Node failover: ${oldUrl} → ${newUrl}`,
+        timestamp: new Date().toISOString(),
+      });
+      if (rpcFailoverMonitor) {
+        const event = rpcFailoverMonitor.recordFailover(oldUrl, newUrl);
+        console.log(`[rpc-failover-monitor] Failover latency: ${event.latencyMs}ms`);
+        if (event.slowFailover) {
+          console.warn(`[rpc-failover-monitor] WARNING: Slow failover detected (${event.latencyMs}ms > threshold)`);
+        }
+      }
+    });
+
+    const initialStatus = await nodeHealthChecker.checkHealth();
+    console.log("[node-health] Initial node status:", initialStatus);
+  }
+
+      setInterval(async () => {
+        try {
+          await threatFetcher.updateFeed();
+        } catch (err) {
+          console.error("[anomaly-detector] Threat feed update error:", (err as Error).message);
+        }
+
+        try {
+          if (nodeHealthChecker) {
+            const statuses = await nodeHealthChecker.checkHealth();
+            console.log("[node-health] Node statuses:", statuses);
+            if (rpcFailoverMonitor) {
+              for (const status of statuses) {
+                rpcFailoverMonitor.recordCheck(status.url, status.healthy);
+              }
+              const degraded = rpcFailoverMonitor.getDegradedEndpoints();
+              if (degraded.length > 0) {
+                console.warn("[rpc-failover-monitor] Degraded endpoints:", degraded);
+              }
+              rpcFailoverMonitor.buildReport();
+            }
+          }
+        } catch (err) {
+          console.error("[node-health] Check error:", (err as Error).message);
+        }
+
+        try {
+          const start = performance.now();
+          const metrics = await fetchMetrics();
+          await runOnce(metrics);
+          const duration = performance.now() - start;
+          const thresholdMs = Number(process.env.RELAYER_LATENCY_THRESHOLD_MS ?? 2000);
+          if (duration > thresholdMs) {
+            void sendAlert({
+              repository: "relayer",
+              alert: `Relayer latency high: ${Math.round(duration)}ms`,
+              timestamp: new Date().toISOString(),
+            });
+            // Also dispatch to dashboard channel
+            dispatchToDashboard({
+              type: "RELAYER_LATENCY_HIGH",
+              severity: "HIGH",
+              detail: `Relayer latency high: ${Math.round(duration)}ms (threshold: ${thresholdMs}ms)`,
+              timestamp: Date.now(),
+            }).catch((err) => {
+              console.error("[anomaly-detector] Dashboard latency alert dispatch failed:", (err as Error).message);
+            });
+          }
+          // VAG-012: surface rate-limit pressure as a log alert each poll cycle
+          metricsIngestionGuard.logStatus();
+        } catch (err) {
+          console.error("[anomaly-detector] Fetch error:", (err as Error).message);
+        }
+      }, POLL_INTERVAL_MS);
 }
 
 if (require.main === module) {

@@ -1,0 +1,49 @@
+{
+  "target": "/app",
+  "total_files": 3,
+  "findings": [
+    {
+      "file": "/app/scanner-engine/src/main.rs",
+      "line": 32,
+      "rule": "TRANSFER_FROM_USAGE",
+      "severity": "MEDIUM",
+      "snippet": "(r\"transfer_from\\b\", \"TRANSFER_FROM_USAGE\", \"MEDIUM\"),"
+    },
+    {
+      "file": "/app/scanner-engine/src/main.rs",
+      "line": 45,
+      "rule": "UNSAFE_UNWRAP",
+      "severity": "HIGH",
+      "snippet": ".map(|(pat, id, sev)| (Regex::new(pat).unwrap(), *id, *sev))"
+    },
+    {
+      "file": "/app/scanner-engine/src/main.rs",
+      "line": 84,
+      "rule": "UNSAFE_UNWRAP",
+      "severity": "HIGH",
+      "snippet": "let report_json = serde_json::to_string_pretty(&all_findings).unwrap();"
+    },
+    {
+      "file": "/app/scanner-engine/src/main.rs",
+      "line": 94,
+      "rule": "UNSAFE_UNWRAP",
+      "severity": "HIGH",
+      "snippet": "let out = serde_json::to_string_pretty(&report).unwrap();"
+    },
+    {
+      "file": "/app/scanner-engine/src/main.rs",
+      "line": 98,
+      "rule": "UNSAFE_UNWRAP",
+      "severity": "HIGH",
+      "snippet": "let root_dir = env::current_dir().unwrap();"
+    },
+    {
+      "file": "/app/scanner-engine/src/main.rs",
+      "line": 102,
+      "rule": "UNSAFE_EXPECT",
+      "severity": "HIGH",
+      "snippet": "fs::write(&report_path, &out).expect(\"Failed to write report\");"
+    }
+  ],
+  "report_hash": "20035afb67269366bff7d0dc7bd0a206736ed5da001f2bd2405a922ebba171d8"
+}

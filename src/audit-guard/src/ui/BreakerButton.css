@@ -1,0 +1,41 @@
+/* src/audit-guard/src/ui/BreakerButton.css */
+:root {
+  --breaker-bg: linear-gradient(135deg, hsl(210, 15%, 12%), hsl(210, 15%, 18%));
+  --breaker-color: hsl(0, 0%, 95%);
+  --breaker-hover: hsl(210, 20%, 22%);
+  --breaker-shadow: rgba(0, 0, 0, 0.4);
+}
+
+.breaker-button {
+  font-family: 'Inter', sans-serif;
+  font-size: 1rem;
+  padding: 0.75rem 1.5rem;
+  color: var(--breaker-color);
+  background: var(--breaker-bg);
+  border: none;
+  border-radius: 0.75rem;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 4px 12px var(--breaker-shadow);
+  cursor: pointer;
+  transition: transform 0.2s ease, background 0.2s ease;
+}
+
+.breaker-button:hover {
+  background: var(--breaker-hover);
+  transform: scale(1.05);
+}
+
+.breaker-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+@keyframes pulse {
+  0% { box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.4); }
+  70% { box-shadow: 0 0 0 10px rgba(255, 255, 255, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(255, 255, 255, 0); }
+}
+
+.breaker-button {
+  animation: pulse 2s infinite;
+}

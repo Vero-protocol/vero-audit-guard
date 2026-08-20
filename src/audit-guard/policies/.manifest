@@ -1,0 +1,5 @@
+{
+  "revision": "vero-audit-guard-policies-v1",
+  "roots": ["lib", "pr", "logic", "rbac"],
+  "rego_version": 0
+}

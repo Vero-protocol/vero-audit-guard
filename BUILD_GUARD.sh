@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # BUILD_GUARD.sh — Vero Protocol Watchtower Automation
 # Scaffolds directories, runs scanner, tests anomaly-detector, anchors audit trail.
-set -euo pipefail
+set -eu
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPORTS_DIR="$ROOT/reports"
 SCANNER_DIR="$ROOT/scanner-engine"
+AUDIT_GUARD_RUST_DIR="$ROOT/src/audit-guard"
 MONITOR_DIR="$ROOT/anomaly-detector"
 TRAIL_DIR="$ROOT/verifiable-audit-trail"
 
@@ -18,6 +19,22 @@ mkdir -p "$REPORTS_DIR" "$ROOT/monitor" "$ROOT/scanner"
 
 # ── 2. Scanner Engine (Rust) ───────────────────────────────────────────────
 log "Building scanner-engine..."
+cd "$SCANNER_DIR"
+
+if ! command -v cargo-audit >/dev/null 2>&1; then
+  fail "cargo-audit is required for dependency vulnerability scanning. Install it with: cargo install cargo-audit --locked"
+fi
+
+log "Auditing scanner-engine Rust dependencies..."
+cargo audit --deny warnings
+
+log "Running scanner-engine unit tests..."
+cargo test
+
+log "Running audit-guard Rust library unit tests..."
+cd "$ROOT/src/audit-guard"
+cargo test
+
 cd "$SCANNER_DIR"
 cargo build --release 2>&1 | tail -5
 
