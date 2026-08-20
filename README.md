@@ -174,6 +174,7 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the compose workflow, environment v
 | `AUDIT_KEYPAIR_SECRET`   | audit-trail          | Stellar secret key for on-chain anchoring      |
 | `SCAN_HOST_TARGET`       | scanner-engine       | Host path mounted as the scan target (compose)     |
 | `BRIDGE_PORT`            | rpc-relayer-bridge   | Host port for the local metrics server (default 8545) |
+| `DISABLE_ATOMIC_VERIFICATION` | rpc-relayer-bridge | Set to `true` to disable atomic verification (trades security/trust for latency/availability). |
 | `RELAYER_METRICS_URL`    | anomaly-detector     | HTTP endpoint exposing relayer metrics JSON    |
 | `AUTHORIZED_ADDRESSES`   | anomaly-detector     | Comma-separated list of allowed relayer addresses |
 | `NONCE_SPIKE_THRESHOLD`  | anomaly-detector     | Nonce delta threshold (default: 50)            |
@@ -182,6 +183,9 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the compose workflow, environment v
 | `HORIZON_URL`            | audit-trail          | Horizon server URL                             |
 | `POLICY_BUNDLE_SIGNATURE`| audit-guard          | Detached hex signature over the signed policy-bundle manifest |
 | `POLICY_BUNDLE_SIGNERS`  | audit-guard          | Comma-separated trusted policy-bundle signer public keys |
+
+> **Note on Atomic Verification (`DISABLE_ATOMIC_VERIFICATION`)**:
+> By default, the `atomic-rpc-relayer-bridge` requires atomic verification, meaning it cross-checks responses against a secondary endpoint to ensure trust and data integrity. Setting this to `true` disables this check, which trades off security (unconditionally trusting a single RPC endpoint) in favor of lower latency and higher availability. It is strongly recommended to keep this enabled in production to prevent a single compromised endpoint from falsifying metrics.
 
 ---
 
