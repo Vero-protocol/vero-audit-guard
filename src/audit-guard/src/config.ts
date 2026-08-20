@@ -4,7 +4,11 @@ export const WEBHOOK_TOKEN = process.env.AUDIT_GUARD_WEBHOOK_TOKEN || '';
 
 // On‑call roster configuration
 export const ONCALL_CONTACTS = process.env.ONCALL_CONTACTS || '';
-export const ONCALL_ROTATION_INTERVAL = (process.env.ONCALL_ROTATION_INTERVAL || 'weekly') as 'daily' | 'weekly';
+const configuredRotationInterval = process.env.ONCALL_ROTATION_INTERVAL;
+export const ONCALL_ROTATION_INTERVAL: 'daily' | 'weekly' =
+  configuredRotationInterval === 'daily' || configuredRotationInterval === 'weekly'
+    ? configuredRotationInterval
+    : 'weekly';
 export const ONCALL_PAGE_WEBHOOK_URL = process.env.ONCALL_PAGE_WEBHOOK_URL || WEBHOOK_URL;
 
 // Log config values for monitoring changes

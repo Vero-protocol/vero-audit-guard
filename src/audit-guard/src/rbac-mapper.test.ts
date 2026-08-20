@@ -11,7 +11,7 @@
  *  - generateReport() output shape
  */
 
-import RbacMapper from "./rbac-mapper";
+import RbacMapper, { RbacMapperError } from "./rbac-mapper";
 import type { RbacPolicy, RbacScanResult } from "./rbac-mapper";
 
 // ---------------------------------------------------------------------------
@@ -73,6 +73,19 @@ const SUPERUSER_USER = {
   roles: ["superuser"],
 };
 
+const ROOT_NAMED_ROLE = {
+  id: "root-role",
+  name: "Root Access",
+  permissions: ["read:contracts"],
+};
+
+const ROOT_USER = {
+  id: "user-5",
+  name: "Erin Root",
+  email: "erin@vero.xyz",
+  roles: ["root-role"],
+};
+
 // ---------------------------------------------------------------------------
 // Helper
 // ---------------------------------------------------------------------------
@@ -99,6 +112,84 @@ describe("RbacMapper — input validation", () => {
   it("throws when users is missing", () => {
     const mapper = makeMapper();
     expect(() => mapper.scan({ roles: [] } as any)).toThrow();
+  });
+
+  it("rejects duplicate role ids without changing the policy", () => {
+    const policy = {
+      roles: [VIEWER_ROLE, { ...VIEWER_ROLE, name: "Viewer copy" }],
+      users: [],
+    };
+
+    expect(() => makeMapper().scan(policy)).toThrow(RbacMapperError);
+    expect(policy.roles).toHaveLength(2);
+  });
+
+  it("rejects unknown role references", () => {
+    const policy: RbacPolicy = {
+      roles: [{ ...VIEWER_ROLE, inherits: ["missing-role"] }],
+      users: [],
+    };
+
+    expect(() => makeMapper().scan(policy)).toThrow(
+      "role viewer inherits unknown role: missing-role"
+    );
+  });
+
+  it("rejects users with unknown roles", () => {
+    const policy: RbacPolicy = {
+      roles: [VIEWER_ROLE],
+      users: [{ id: "u1", name: "User", roles: ["missing-role"] }],
+    };
+
+    expect(() => makeMapper().scan(policy)).toThrow(
+      "user u1 references unknown role: missing-role"
+    );
+  });
+
+  it("rejects invalid inheritance depth", () => {
+    expect(() => new RbacMapper({ maxInheritanceDepth: 0 })).toThrow(
+      "maxInheritanceDepth must be a positive integer"
+    );
+  });
+
+  it("rejects non-object options", () => {
+    expect(() => new RbacMapper(null as any)).toThrow(
+      "RBAC options must be an object"
+    );
+  });
+
+  it("rejects dangerousPermissions containing a non-string", () => {
+    expect(() => new RbacMapper({ dangerousPermissions: [123 as any] })).toThrow(
+      "dangerousPermissions must contain non-empty strings"
+    );
+  });
+
+  it("rejects a malformed role", () => {
+    const policy: RbacPolicy = {
+      roles: [{ id: "bad", name: "", permissions: [] } as any],
+      users: [],
+    };
+    expect(() => makeMapper().scan(policy)).toThrow(
+      "each role must have non-empty id, name, and permission values"
+    );
+  });
+
+  it("rejects a malformed user", () => {
+    const policy: RbacPolicy = {
+      roles: [VIEWER_ROLE],
+      users: [{ id: "u1", name: "", roles: ["viewer"] } as any],
+    };
+    expect(() => makeMapper().scan(policy)).toThrow(
+      "each user must have non-empty id, name, and role values"
+    );
+  });
+
+  it("rejects duplicate user ids", () => {
+    const policy: RbacPolicy = {
+      roles: [VIEWER_ROLE],
+      users: [NORMAL_USER, { ...NORMAL_USER }],
+    };
+    expect(() => makeMapper().scan(policy)).toThrow("duplicate user id: user-1");
   });
 });
 
@@ -141,12 +232,26 @@ describe("RbacMapper — direct admin assignment", () => {
 
   it("lists the admin user in adminUsers", () => {
     const policy: RbacPolicy = {
-      roles: [ADMIN_ROLE],
+      roles: [VIEWER_ROLE, EDITOR_ROLE, ADMIN_ROLE],
       users: [ADMIN_USER],
     };
     const result = makeMapper().scan(policy);
     expect(result.adminUsers).toHaveLength(1);
     expect(result.adminUsers[0].id).toBe("user-3");
+  });
+
+  it("flags a role whose name matches the admin pattern even without dangerous permissions", () => {
+    const policy: RbacPolicy = {
+      roles: [ROOT_NAMED_ROLE],
+      users: [ROOT_USER],
+    };
+    const result = makeMapper().scan(policy);
+    const finding = result.escalationFindings.find(
+      (f) => f.userId === "user-5" && f.roleId === "root-role"
+    );
+    expect(finding).toBeDefined();
+    expect(finding!.severity).toBe("HIGH");
+    expect(finding!.reason).toContain("matches admin pattern");
   });
 });
 
@@ -352,5 +457,11 @@ describe("RbacMapper — generateReport", () => {
     const report = makeMapper().generateReport(cleanResult);
     expect(report).toContain("SAFE");
     expect(report).toContain("No privilege escalation paths detected");
+  });
+
+  it("shows a placeholder when the role hierarchy is empty", () => {
+    const emptyResult = makeMapper().scan({ roles: [], users: [] });
+    const report = makeMapper().generateReport(emptyResult);
+    expect(report).toContain("_No roles defined._");
   });
 });

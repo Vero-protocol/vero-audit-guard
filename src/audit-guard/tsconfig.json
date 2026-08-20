@@ -2,8 +2,9 @@
   "compilerOptions": {
     "target": "ES2020",
     "module": "commonjs",
-    "lib": ["ES2020"],
-    "types": ["node", "jest"],
+    "jsx": "react-jsx",
+    "lib": ["ES2020", "DOM"],
+    "types": ["node", "jest", "@testing-library/jest-dom"],
     "outDir": "./dist",
     "rootDir": "./src",
     "declaration": true,
