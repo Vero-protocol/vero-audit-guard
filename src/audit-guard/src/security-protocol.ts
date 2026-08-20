@@ -1,7 +1,8 @@
 /**
  * Issue #109: Standardizing security protocols and improving system resilience against vulnerabilities.
  * Integrates with existing Audit-Guard API.
- * Requirement: Adherence to Rust safety standards (implemented conceptually via strict TS type safety).
+ * Requirement: Adherence to Rust safety standards
+ * (implemented conceptually via strict TS type safety).
  */
 
 export interface SecurityProtocolResult {
