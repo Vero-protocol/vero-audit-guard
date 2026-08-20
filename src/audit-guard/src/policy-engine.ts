@@ -163,9 +163,33 @@ export class PolicyEngine {
       this.applyPolicyBundleVerification(result);
       return result;
     } catch (error) {
-      console.error("[PolicyEngine] OPA evaluation failed:", error);
-      const result = await this.evaluateWithoutOPA(enrichedPrData);
-      result.overflow_findings = overflowFindings;
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(
+        "[PolicyEngine] CRITICAL: OPA evaluation failed — failing closed (no fallback).",
+        error
+      );
+    
+      const violation: PolicyViolation = {
+        rule: "OPA_EVALUATION_FAILED",
+        severity: "CRITICAL",
+        message:
+          "❌ Primary OPA policy evaluator failed — PR blocked (fail-closed)",
+        detail:
+          `OPA crashed, timed out, or returned invalid output. ` +
+          `Fallback evaluator was NOT used. Error: ${message}`,
+      };
+    
+      const result: EvaluationResult = {
+        status: "NON_COMPLIANT",
+        violations: [violation],
+        warnings: [],
+        summary: "❌ OPA evaluation failed — failing closed",
+        violations_count: 1,
+        warnings_count: 0,
+        high_severity_violations: [violation],
+        overflow_findings: overflowFindings,
+      };
+    
       this.applyPolicyBundleVerification(result);
       return result;
     }
@@ -227,8 +251,13 @@ export class PolicyEngine {
       `;
 
       const command = `opa eval -d ${this.policiesDir} -i ${tempInput} '${query}'`;
-
-      const output = execSync(command).toString();
+      const timeoutMs = Number(process.env.OPA_EVAL_TIMEOUT_MS) || 30_000;
+      
+      const output = execSync(command, {
+        timeout: timeoutMs,
+        encoding: "utf8",
+        maxBuffer: 10 * 1024 * 1024,
+      }).toString();
       const result = JSON.parse(output);
 
       return this.parseOPAResult(result);
