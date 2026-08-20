@@ -1,3 +1,4 @@
+
 /**
  * Atomic RPC Relayer Bridge
  * 
@@ -104,13 +105,31 @@ export class AtomicRpcRelayerBridge {
     return errorResponse;
   }
 
+  private buildRequestUrl(requestEndpoint: string, endpointUrl: string): string {
+    let baseUrl: URL;
+    let requestUrl: URL;
+
+    try {
+      baseUrl = new URL(endpointUrl);
+      requestUrl = new URL(requestEndpoint, baseUrl);
+    } catch {
+      throw new Error("Invalid RPC endpoint URL");
+    }
+
+    if (requestUrl.origin !== baseUrl.origin) {
+      throw new Error("Request endpoint must resolve to the configured RPC origin");
+    }
+
+    return requestUrl.toString();
+  }
+
   private async executeRequest(
     request: BridgeRequest,
     endpoint: BridgeEndpoint
   ): Promise<unknown> {
     const axiosConfig = {
       method: request.method.toLowerCase(),
-      url: `${endpoint.url}${request.endpoint}`,
+      url: this.buildRequestUrl(request.endpoint, endpoint.url),
       data: request.payload,
       timeout: this.timeoutMs
     };
