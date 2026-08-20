@@ -15,6 +15,7 @@ export interface LocalServerOptions {
   initialNonce?: number;
   initialFailedTxCount?: number;
   endpoints?: BridgeEndpoint[];
+  authToken?: string;
 }
 
 export interface RelayerMetricsPayload {
@@ -48,6 +49,7 @@ export function createLocalBridgeHandler(options: LocalServerOptions = {}): {
   let nonce = options.initialNonce ?? parsePositiveInt(process.env.INITIAL_NONCE, 100);
   const failedTxCount =
     options.initialFailedTxCount ?? parsePositiveInt(process.env.INITIAL_FAILED_TX_COUNT, 0);
+  const authToken = options.authToken ?? process.env.AUTH_TOKEN;
 
   const bridge = new AtomicRpcRelayerBridge({
     endpoints: options.endpoints ?? defaultEndpoints(),
@@ -77,8 +79,15 @@ export function createLocalBridgeHandler(options: LocalServerOptions = {}): {
       return;
     }
 
+    if (method === "GET" && (url === "/metrics" || url === "/audit-log")) {
+      const authHeader = req.headers.authorization;
+      if (!authHeader || authHeader !== `Bearer ${authToken}`) {
+        json(res, 401, { error: "unauthorized" });
+        return;
+      }
+    }
+
     if (method === "GET" && url === "/metrics") {
-      nonce += 1;
       json(res, 200, getMetrics());
       return;
     }
