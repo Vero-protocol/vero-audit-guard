@@ -452,6 +452,17 @@ describe("PolicyEngine", () => {
     });
   });
 
+  it("should return NON_COMPLIANT when bundle tampering is detected", async () => {
+  // Mock the verifier to return a BundleTampered error
+  // Mock the verifier.verify() to return { verified: false, errors: [{ code: 'BundleTampered', ... }] }
+  
+  const result = await engine.evaluate(mockPrData);
+  
+  expect(result.status).toBe("NON_COMPLIANT");
+  expect(result.violations_count).toBeGreaterThan(0);
+  expect(result.summary).toContain("tampering detected");
+});
+
   describe("Large Changes", () => {
     it("should warn about many files modified", async () => {
       const files = Array.from({ length: 25 }, (_, i) => `src/file${i}.ts`);
