@@ -11,3 +11,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Implemented liveness and readiness health check endpoints.
 - Added security incident logger component.
 - Initialized `vero-audit-guard` watchtower with core services (scanner-engine, anomaly-detector, audit-guard, verifiable-audit-trail).
+
+### Fixed
+- Ignore generated JSON reports in nested `reports` directories and remove the tracked nested scan report.
