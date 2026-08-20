@@ -137,11 +137,13 @@ If you add a new top-level sub-package or significantly shift ownership of an ex
 
 ## Pull requests
 
-1. Branch from `main` using the issue naming convention when one is specified (for example `chore/issue-279-add-docker-compose-setup`).
-2. Keep changes scoped to the issue. Prefer additive tooling over drive-by refactors.
-3. Make sure new TypeScript compiles under `strict` and that package tests still pass (`npm test` / `cargo test` in the touched crate).
-4. Update `CHANGELOG.md` under `## [Unreleased]` with a clear, concise description of your change (see Changelog section above).
-5. Open the PR against `Vero-protocol/vero-audit-guard` and reference the issue (`Closes #227`).
-6. Fill in the repository PR description completely — state what was completed from the issue.
+1. Fork the upstream repository at `https://github.com/Vero-protocol/vero-audit-guard` if you haven't already.
+2. Branch from `main` using the issue naming convention when one is specified (for example `chore/issue-279-add-docker-compose-setup`).
+3. Keep changes scoped to the issue. Prefer additive tooling over drive-by refactors.
+4. Make sure new TypeScript compiles under `strict` and that package tests still pass (`npm test` / `cargo test` in the touched crate).
+5. Update `CHANGELOG.md` under `## [Unreleased]` with a clear, concise description of your change (see Changelog section above).
+6. Push your branch to your fork.
+7. Open the PR from your fork against `Vero-protocol/vero-audit-guard` and reference the issue (`Closes #227`).
+8. Fill in the repository PR description completely — state what was completed from the issue.
 
 Do not commit `.env`, keypairs, or report JSON that may contain sensitive paths.
