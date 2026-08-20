@@ -52,7 +52,7 @@
 | `anomaly-detector`         | TypeScript| Real-time relayer monitoring                      |
 | `atomic-rpc-relayer-bridge`| TypeScript| Local RPC/metrics bridge for the relayer pipeline |
 | `audit-guard`              | TypeScript| Policy as Code enforcement on GitHub PRs           |
-| `verifiable-audit-trail`   | TypeScript| On-chain report hash anchoring (Stellar)          |
+| [`verifiable-audit-trail`](./verifiable-audit-trail/README.md) | TypeScript| On-chain report hash anchoring (Stellar) |
 | `BUILD_GUARD.sh`           | Bash      | Local and CI orchestrator                         |
 | `.github/workflows/`       | YAML      | PR-gated security pipeline                        |
 
