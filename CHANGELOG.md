@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Security
 - Fail closed when OPA policy evaluation crashes or times out instead of silently using the weaker TypeScript fallback (#301).
+### Fixed
+- Make anomaly-detector nonce-db read-modify-write atomic and lock-protected so concurrent writers cannot clobber state (#307).
 
 ### Security
 - Hardened atomic RPC relayer URL construction so request endpoints must resolve to the configured RPC origin.

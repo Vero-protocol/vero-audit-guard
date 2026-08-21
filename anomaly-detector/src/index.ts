@@ -187,22 +187,113 @@ async function dispatchToDashboard(alert: AnomalyAlert): Promise<void> {
   }
 }
 
-function loadNonces(): [string, number][] {
+function loadNoncesFrom(dbPath: string): Record<string, number> {
   try {
-    const data = fs.readFileSync(DB_PATH, "utf-8");
+    const data = fs.readFileSync(dbPath, "utf-8");
     const obj = JSON.parse(data) as Record<string, number>;
-    return Object.entries(obj);
+    return obj && typeof obj === "object" ? obj : {};
   } catch {
-    return [];
+    return {};
+  }
+}
+
+function loadNonces(): [string, number][] {
+  return Object.entries(loadNoncesFrom(DB_PATH));
+}
+
+function lockPathFor(dbPath: string): string {
+  return `${dbPath}.lock`;
+}
+
+function acquireNonceDbLock(dbPath: string, timeoutMs = 5000): string {
+  const lockDir = lockPathFor(dbPath);
+  const start = Date.now();
+  while (true) {
+    try {
+      fs.mkdirSync(lockDir);
+      return lockDir;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== "EEXIST") throw err;
+      if (Date.now() - start > timeoutMs) {
+        throw new Error(
+          `Timed out after ${timeoutMs}ms waiting for nonce-db lock: ${lockDir}`
+        );
+      }
+      const waitUntil = Date.now() + 10;
+      while (Date.now() < waitUntil) {
+        /* brief spin before retry */
+      }
+    }
+  }
+}
+
+function releaseNonceDbLock(lockDir: string): void {
+  try {
+    fs.rmdirSync(lockDir);
+  } catch {
+    // Best-effort unlock; next writer may recover after timeout.
+  }
+}
+
+function atomicWriteJson(filePath: string, data: unknown): void {
+  const dir = path.dirname(filePath);
+  const tmp = path.join(
+    dir,
+    `.${path.basename(filePath)}.${process.pid}.${Date.now()}.tmp`
+  );
+  fs.writeFileSync(tmp, JSON.stringify(data, null, 2), "utf-8");
+  try {
+    fs.renameSync(tmp, filePath);
+  } catch {
+    // Windows cannot rename over an existing file; replace then rename.
+    try {
+      fs.unlinkSync(filePath);
+    } catch {
+      /* file may not exist */
+    }
+    fs.renameSync(tmp, filePath);
+  }
+}
+
+/**
+ * Lock-protected read-modify-write for nonce state (Issue #307).
+ * Merges local updates with on-disk state (per-address max nonce) so
+ * concurrent writers cannot clobber each other, then atomically replaces
+ * the db file via temp + rename.
+ */
+export function persistNonceMap(
+  dbPath: string,
+  local: Record<string, number>
+): Record<string, number> {
+  const lockDir = acquireNonceDbLock(dbPath);
+  try {
+    const onDisk = loadNoncesFrom(dbPath);
+    const merged: Record<string, number> = { ...onDisk };
+
+    for (const [addr, nonce] of Object.entries(local)) {
+      const existing = merged[addr];
+      merged[addr] =
+        existing === undefined ? nonce : Math.max(existing, nonce);
+    }
+
+    atomicWriteJson(dbPath, merged);
+    return merged;
+  } finally {
+    releaseNonceDbLock(lockDir);
   }
 }
 
 function saveNonces(): void {
-  const obj: Record<string, number> = {};
+  const local: Record<string, number> = {};
   for (const [addr, nonce] of previousNonces.entries()) {
-    obj[addr] = nonce;
+    local[addr] = nonce;
   }
-  fs.writeFileSync(DB_PATH, JSON.stringify(obj, null, 2));
+  const merged = persistNonceMap(DB_PATH, local);
+  previousNonces.clear();
+  for (const [addr, nonce] of Object.entries(merged)) {
+    previousNonces.set(addr, nonce);
+  }
 }
 
 function analyze(metrics: RelayerMetrics[]): AnomalyAlert[] {
