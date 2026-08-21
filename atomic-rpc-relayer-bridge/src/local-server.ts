@@ -51,6 +51,7 @@ export function createLocalBridgeHandler(options: LocalServerOptions = {}): {
     options.initialFailedTxCount ?? parsePositiveInt(process.env.INITIAL_FAILED_TX_COUNT, 0);
   const authToken = options.authToken ?? process.env.AUTH_TOKEN;
 
+  const disableAtomicVerification = process.env.DISABLE_ATOMIC_VERIFICATION === "true";
   const bridge = new AtomicRpcRelayerBridge({
     endpoints: options.endpoints ?? defaultEndpoints(),
     requireAtomicVerification: !disableAtomicVerification,
