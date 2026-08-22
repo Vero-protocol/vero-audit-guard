@@ -16,6 +16,7 @@ export interface LocalServerOptions {
   initialFailedTxCount?: number;
   endpoints?: BridgeEndpoint[];
   authToken?: string;
+  disableAtomicVerification?: boolean;
 }
 
 export interface RelayerMetricsPayload {
@@ -29,6 +30,16 @@ function parsePositiveInt(value: string | undefined, fallback: number): number {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
   return parsed;
+}
+
+function parseBooleanFlag(value: string | undefined, name: string): boolean {
+  if (value === undefined) return false;
+
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "true") return true;
+  if (normalized === "false") return false;
+
+  throw new Error(`${name} must be either "true" or "false"`);
 }
 
 function defaultEndpoints(): BridgeEndpoint[] {
@@ -50,6 +61,16 @@ export function createLocalBridgeHandler(options: LocalServerOptions = {}): {
   const failedTxCount =
     options.initialFailedTxCount ?? parsePositiveInt(process.env.INITIAL_FAILED_TX_COUNT, 0);
   const authToken = options.authToken ?? process.env.AUTH_TOKEN;
+  const disableAtomicVerification =
+    options.disableAtomicVerification ??
+    parseBooleanFlag(process.env.DISABLE_ATOMIC_VERIFICATION, "DISABLE_ATOMIC_VERIFICATION");
+
+  if (disableAtomicVerification) {
+    console.warn(
+      "[atomic-rpc-relayer-bridge] WARNING: atomic verification is disabled; " +
+        "responses from a single RPC endpoint will be trusted without a secondary cross-check"
+    );
+  }
 
   const bridge = new AtomicRpcRelayerBridge({
     endpoints: options.endpoints ?? defaultEndpoints(),
