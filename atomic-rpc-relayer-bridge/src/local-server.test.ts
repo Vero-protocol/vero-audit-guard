@@ -1,5 +1,9 @@
 import * as http from "http";
-import axios, { type AxiosResponse } from "axios";
+import axios, {
+  type AxiosResponse,
+  type InternalAxiosRequestConfig,
+  AxiosHeaders,
+} from "axios";
 import { createLocalBridgeHandler, startLocalServer } from "./local-server";
 
 jest.mock("axios");
@@ -12,7 +16,8 @@ function mockRpcResponse(data: unknown): void {
     status: 200,
     statusText: "OK",
     headers: {},
-    config: {},
+    // axios 1.x requires `headers` on InternalAxiosRequestConfig.
+    config: { headers: new AxiosHeaders() } as InternalAxiosRequestConfig,
   };
   mockedAxios.mockResolvedValue(response);
 }
