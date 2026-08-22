@@ -1,5 +1,21 @@
 import * as http from "http";
+import axios, { type AxiosResponse } from "axios";
 import { createLocalBridgeHandler, startLocalServer } from "./local-server";
+
+jest.mock("axios");
+
+const mockedAxios = axios as jest.MockedFunction<typeof axios>;
+
+function mockRpcResponse(data: unknown): void {
+  const response: AxiosResponse = {
+    data,
+    status: 200,
+    statusText: "OK",
+    headers: {},
+    config: {},
+  };
+  mockedAxios.mockResolvedValue(response);
+}
 
 function requestJson(
   port: number,
@@ -24,6 +40,19 @@ function requestJson(
 }
 
 describe("local-server", () => {
+  const originalEnv = process.env;
+
+  beforeEach(() => {
+    process.env = { ...originalEnv };
+    delete process.env.DISABLE_ATOMIC_VERIFICATION;
+    jest.clearAllMocks();
+  });
+
+  afterEach(() => {
+    process.env = originalEnv;
+    jest.restoreAllMocks();
+  });
+
   it("serves health and constant metrics", async () => {
     const server = startLocalServer({
       port: 0,
@@ -100,5 +129,77 @@ describe("local-server", () => {
     expect(row.address).toBe("GFIXTURE");
     expect(row.nonce).toBe(42);
     expect(row.failedTxCount).toBe(1);
+  });
+
+  it.each([
+    ["unset", undefined],
+    ["false", "false"],
+  ])("enables atomic verification when the opt-out is %s", async (_case, flag) => {
+    if (flag === undefined) {
+      delete process.env.DISABLE_ATOMIC_VERIFICATION;
+    } else {
+      process.env.DISABLE_ATOMIC_VERIFICATION = flag;
+    }
+    mockRpcResponse({ ledger: 123 });
+    const { getBridge } = createLocalBridgeHandler({
+      endpoints: [
+        { url: "https://primary.example", priority: 10 },
+        { url: "https://secondary.example", priority: 5 },
+      ],
+    });
+
+    const result = await getBridge().relay({
+      id: "default-verification",
+      method: "GET",
+      endpoint: "/status",
+      timestamp: Date.now(),
+    });
+
+    expect(result.success).toBe(true);
+    expect(mockedAxios).toHaveBeenCalledTimes(2);
+    expect(mockedAxios).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ url: "https://primary.example/status" })
+    );
+    expect(mockedAxios).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ url: "https://secondary.example/status" })
+    );
+  });
+
+  it("requires an explicit opt-out and emits a security warning", async () => {
+    process.env.DISABLE_ATOMIC_VERIFICATION = "true";
+    const warning = jest.spyOn(console, "warn").mockImplementation(() => undefined);
+    mockRpcResponse({ ledger: 123 });
+    const { getBridge } = createLocalBridgeHandler({
+      endpoints: [
+        { url: "https://primary.example", priority: 10 },
+        { url: "https://secondary.example", priority: 5 },
+      ],
+    });
+
+    const result = await getBridge().relay({
+      id: "explicit-opt-out",
+      method: "GET",
+      endpoint: "/status",
+      timestamp: Date.now(),
+    });
+
+    expect(result.success).toBe(true);
+    expect(mockedAxios).toHaveBeenCalledTimes(1);
+    expect(mockedAxios).toHaveBeenCalledWith(
+      expect.objectContaining({ url: "https://primary.example/status" })
+    );
+    expect(warning).toHaveBeenCalledWith(
+      expect.stringContaining("atomic verification is disabled")
+    );
+  });
+
+  it("rejects ambiguous atomic verification configuration", () => {
+    process.env.DISABLE_ATOMIC_VERIFICATION = "yes";
+
+    expect(() => createLocalBridgeHandler()).toThrow(
+      'DISABLE_ATOMIC_VERIFICATION must be either "true" or "false"'
+    );
   });
 });
