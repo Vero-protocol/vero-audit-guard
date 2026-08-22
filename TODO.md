@@ -2,16 +2,16 @@
 
 ## Planned Implementation
 
-- [ ] Add verification capability to `verifiable-audit-trail/src/index.ts`:
-  - [ ] Compute local report hash identifiers consistent with memo format
-  - [ ] Query Horizon for prior audit anchors and extract memo identifiers
-  - [ ] Compare local identifiers vs anchored identifiers
-  - [ ] On mismatch/missing anchors: log integrity incident + fail
-  - [ ] Add CLI modes: `anchor` and `verify` (keep backward compatibility)
+- [x] Add verification capability to `verifiable-audit-trail/src/index.ts`:
+  - [x] Compute local report hash identifiers consistent with memo format
+  - [x] Query Horizon for a specific prior audit anchor and extract its memo hash
+  - [x] Compare local identifiers vs anchored identifiers
+  - [x] On mismatch/missing anchors: log integrity incident + fail
+  - [x] Add CLI modes: `anchor` and `verify` (keep backward compatibility)
 
 - [ ] Integrate verification into `BUILD_GUARD.sh` after anchoring
 
-- [ ] Add/extend tests (prefer pure helper tests first)
+- [x] Add/extend tests (prefer pure helper tests first)
 
-- [ ] Run test/build commands to validate everything
+- [x] Run test/build commands to validate everything
 

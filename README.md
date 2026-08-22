@@ -186,6 +186,7 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the compose workflow, environment v
 
 > **Note on Atomic Verification (`DISABLE_ATOMIC_VERIFICATION`)**:
 > By default, the `atomic-rpc-relayer-bridge` requires atomic verification, meaning it cross-checks responses against a secondary endpoint to ensure trust and data integrity. Setting this to `true` disables this check, which trades off security (unconditionally trusting a single RPC endpoint) in favor of lower latency and higher availability. It is strongly recommended to keep this enabled in production to prevent a single compromised endpoint from falsifying metrics.
+> The only accepted values are `true` and `false`; invalid values stop server initialization instead of silently changing the verification policy.
 
 ---
 
