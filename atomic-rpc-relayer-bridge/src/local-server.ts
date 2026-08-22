@@ -72,7 +72,6 @@ export function createLocalBridgeHandler(options: LocalServerOptions = {}): {
     );
   }
 
-  const disableAtomicVerification = process.env.DISABLE_ATOMIC_VERIFICATION === "true";
   const bridge = new AtomicRpcRelayerBridge({
     endpoints: options.endpoints ?? defaultEndpoints(),
     requireAtomicVerification: !disableAtomicVerification,
