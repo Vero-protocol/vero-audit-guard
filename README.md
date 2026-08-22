@@ -50,7 +50,7 @@
 |----------------------------|-----------|---------------------------------------------------|
 | `scanner-engine`           | Rust      | Static analysis of Soroban contracts              |
 | `anomaly-detector`         | TypeScript| Real-time relayer monitoring                      |
-| `atomic-rpc-relayer-bridge`| TypeScript| Local RPC/metrics bridge for the relayer pipeline |
+| [`atomic-rpc-relayer-bridge`](./atomic-rpc-relayer-bridge/README.md) | TypeScript| Atomic RPC relaying with integrity verification |
 | `audit-guard`              | TypeScript| Policy as Code enforcement on GitHub PRs           |
 | [`verifiable-audit-trail`](./verifiable-audit-trail/README.md) | TypeScript| On-chain report hash anchoring (Stellar) |
 | `BUILD_GUARD.sh`           | Bash      | Local and CI orchestrator                         |
