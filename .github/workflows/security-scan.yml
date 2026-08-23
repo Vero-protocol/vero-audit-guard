@@ -66,12 +66,26 @@ jobs:
       - name: Run static analysis
         run: |
           mkdir -p ../reports
-          if [ -d "vero-core-contracts" ]; then
-            ./target/release/scanner ../vero-core-contracts | tee ../reports/latest-scan.json
-          else
-            echo '{"target":"N/A","total_files":0,"findings":[],"report_hash":"N/A"}' \
-              > ../reports/latest-scan.json
+          TARGET="../scan-target/vero-core-contracts"
+          # Fail loudly. Previously a missing target wrote a hardcoded empty
+          # report, which the security gate then passed — so every PR received a
+          # green verdict from a scan that never ran.
+          if [ ! -d "$TARGET" ]; then
+            echo "::error::Scan target $TARGET is missing. Refusing to emit an empty report."
+            exit 1
           fi
+          ./target/release/scanner "$TARGET" | tee ../reports/latest-scan.json
+          # The scanner exits non-zero on CRITICAL findings, but `tee` masks
+          # that, so check the pipe status explicitly.
+          if [ "${PIPESTATUS[0]}" -ne 0 ]; then
+            echo "::error::Scanner reported CRITICAL findings."
+            exit 1
+          fi
+          if ! grep -q '"total_files"' ../reports/latest-scan.json; then
+            echo "::error::Scanner produced no usable report."
+            exit 1
+          fi
+        shell: bash
         working-directory: scanner-engine
 
       - name: Upload scan report

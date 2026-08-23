@@ -124,4 +124,25 @@ describe("security-gate", () => {
       expect(result.passed).toBe(true);
     });
   });
+
+  describe("skipped-scan sentinels", () => {
+    // The CI workflow used to write {"target":"N/A", ...} whenever the scan
+    // target was missing — which was always, since nothing checked the
+    // contracts out. "N/A" is truthy, so it satisfied the compliance check and
+    // every PR received a passing security verdict from a scan that never ran.
+    it("blocks a report whose target is the N/A sentinel", () => {
+      const result = evaluateSecurityGate({ target: "N/A", findings: [] });
+      expect(result.passed).toBe(false);
+      expect(result.summary).toContain("Target analysis missing");
+    });
+
+    it("blocks a report with an empty or whitespace target", () => {
+      expect(evaluateSecurityGate({ target: "", findings: [] }).passed).toBe(false);
+      expect(evaluateSecurityGate({ target: "   ", findings: [] }).passed).toBe(false);
+    });
+
+    it("still passes a real target with no findings", () => {
+      expect(evaluateSecurityGate(makeReport([])).passed).toBe(true);
+    });
+  });
 });
