@@ -63,6 +63,15 @@ jobs:
         run: cargo test
         working-directory: scanner-engine
 
+      # The whole point of this job is scanning the contracts, so they have to
+      # be fetched. Without this the scan step's fail-closed guard fires and
+      # the job stops — which is correct behaviour, but not useful.
+      - name: Check out the contracts to scan
+        uses: actions/checkout@v4
+        with:
+          repository: Vero-protocol/vero-core-contracts
+          path: scan-target/vero-core-contracts
+
       - name: Run static analysis
         run: |
           mkdir -p ../reports
