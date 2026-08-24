@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Restore bridge startup while preserving secure-by-default atomic verification, with an explicit validated opt-out and warning (follow-up to #321).
 - Make anomaly-detector nonce-db read-modify-write atomic and lock-protected so concurrent writers cannot clobber state (#307).
+- Replace the anomaly-detector nonce-db busy-wait lock with an async wait (no event-loop stall) and stale-lock recovery so orphaned locks no longer halt persistence; persistence failures now surface as alerts (#346).
 
 ### Security
 - Hardened atomic RPC relayer URL construction so request endpoints must resolve to the configured RPC origin.
