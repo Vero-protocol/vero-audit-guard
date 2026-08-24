@@ -236,4 +236,106 @@ describe("security-gate CLI entrypoint", () => {
     expect(result.stdout).toContain("Target analysis missing");
     expect(result.stdout).toContain('"passed": false');
   });
+
+  // -------------------------------------------------------------------------
+  // Threshold validation (fix: invalid values must not silently disable gate)
+  // -------------------------------------------------------------------------
+
+  it("accepts SECURITY_SEVERITY_THRESHOLD=HIGH and maps it to rank 3", () => {
+    // This is the canonical mis-configuration that previously caused a silent
+    // bypass: "HIGH" was parsed as NaN, making every isBlockingSeverity
+    // comparison false.  The fix accepts severity names and maps them through
+    // SEVERITY_RANK — so "HIGH" → 3 (same as the default).
+    const reportPath = writeReport("critical-with-name-threshold.json", {
+      target: "scanner-test-target",
+      findings: [
+        {
+          file: "contracts/vault.rs",
+          line: 42,
+          rule: "UNSAFE_BLOCK",
+          severity: "CRITICAL",
+        },
+      ],
+    });
+
+    const result = runCli([reportPath], { SECURITY_SEVERITY_THRESHOLD: "HIGH" });
+
+    // CRITICAL (rank 4) > threshold 3  →  blocked
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("Threshold : severity rank > 3");
+    expect(result.stdout).toContain("Blocking  : 1");
+    expect(result.stdout).toContain('"passed": false');
+    // No error message — this is a valid configuration
+    expect(result.stderr).toBe("");
+  });
+
+  it("accepts a severity name in lowercase as a valid threshold", () => {
+    const reportPath = writeReport("clean-for-name-threshold.json", {
+      target: "scanner-test-target",
+      findings: [],
+    });
+
+    // "high" is accepted and maps to rank 3 (same as default).
+    const result = runCli([reportPath], { SECURITY_SEVERITY_THRESHOLD: "high" });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("Threshold : severity rank > 3");
+    expect(result.stdout).toContain('"passed": true');
+  });
+
+  it("rejects a float threshold and exits non-zero", () => {
+    const reportPath = writeReport("clean-for-float-threshold.json", {
+      target: "scanner-test-target",
+      findings: [],
+    });
+
+    const result = runCli([reportPath], { SECURITY_SEVERITY_THRESHOLD: "2.5" });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Invalid SECURITY_SEVERITY_THRESHOLD");
+  });
+
+  it("rejects an out-of-range numeric threshold and exits non-zero", () => {
+    const reportPath = writeReport("clean-for-range-threshold.json", {
+      target: "scanner-test-target",
+      findings: [],
+    });
+
+    const result = runCli([reportPath], { SECURITY_SEVERITY_THRESHOLD: "99" });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Invalid SECURITY_SEVERITY_THRESHOLD");
+  });
+
+  it("rejects a completely invalid threshold string and exits non-zero", () => {
+    const reportPath = writeReport("clean-for-garbage-threshold.json", {
+      target: "scanner-test-target",
+      findings: [],
+    });
+
+    const result = runCli([reportPath], { SECURITY_SEVERITY_THRESHOLD: "not-a-threshold" });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Invalid SECURITY_SEVERITY_THRESHOLD");
+  });
+
+  it("uses the default threshold when SECURITY_SEVERITY_THRESHOLD is absent", () => {
+    const reportPath = writeReport("critical-no-threshold-env.json", {
+      target: "scanner-test-target",
+      findings: [
+        {
+          file: "contracts/vault.rs",
+          line: 1,
+          rule: "UNSAFE_BLOCK",
+          severity: "CRITICAL",
+        },
+      ],
+    });
+
+    const result = runCli([reportPath]);
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("Threshold : severity rank > 3");
+    expect(result.stdout).toContain("Blocking  : 1");
+  });
 });

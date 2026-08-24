@@ -32,6 +32,26 @@ describe("security-gate", () => {
     it("blocks unknown severities", () => {
       expect(isBlockingSeverity("UNKNOWN", 3)).toBe(true);
     });
+
+    // Defensive guard: a NaN threshold (from a misconfigured env var) must
+    // never silently pass a CRITICAL finding.
+    it("blocks CRITICAL when threshold is NaN", () => {
+      expect(isBlockingSeverity("CRITICAL", NaN)).toBe(true);
+    });
+
+    it("blocks every severity level when threshold is NaN", () => {
+      for (const sev of ["INFO", "LOW", "MEDIUM", "HIGH", "CRITICAL"]) {
+        expect(isBlockingSeverity(sev, NaN)).toBe(true);
+      }
+    });
+
+    it("blocks when threshold is +Infinity", () => {
+      expect(isBlockingSeverity("CRITICAL", Infinity)).toBe(true);
+    });
+
+    it("blocks when threshold is -Infinity", () => {
+      expect(isBlockingSeverity("INFO", -Infinity)).toBe(true);
+    });
   });
 
   describe("evaluateSecurityGate", () => {

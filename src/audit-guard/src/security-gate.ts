@@ -57,6 +57,13 @@ export function isBlockingSeverity(
   severity: string,
   threshold: number = DEFAULT_SEVERITY_THRESHOLD
 ): boolean {
+  // Defensive guard: a non-finite threshold (NaN, ±Infinity) would make every
+  // comparison false and silently disable the gate.  Treat it as "block
+  // everything" so a misconfigured caller never produces a false pass.
+  if (!Number.isFinite(threshold)) {
+    return true;
+  }
+
   const rank = severityRank(severity);
   if (rank === null) {
     return true;
