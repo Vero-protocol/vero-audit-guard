@@ -16,6 +16,11 @@ import {
   PolicyBundleVerifier,
   PolicyBundleErrorCode,
 } from "./policy-bundle-verifier";
+import ProtocolStateMachine, {
+  createConsoleAlertObserver,
+  buildStateMachineAlert,
+  type ProtocolEvent,
+} from "./protocol-state-machine";
 
 
 export interface PRData {
@@ -77,13 +82,31 @@ export class PolicyEngine {
   private policiesDir: string;
   private opaAvailable: boolean = false;
   private overflowChecker: OverflowChecker;
+  /**
+   * Issue #172 / VAG-004 — Internal Protocol-Invariant State Machine.
+   * Tracks the scanner-engine's lifecycle (IDLE → SCANNING → REPORTING → DONE/FAILED).
+   * Observational-only: no on-chain halt authority.
+   */
+  private stateMachine: ProtocolStateMachine;
 
   constructor(policiesDir?: string) {
     this.overflowChecker = new OverflowChecker();
     this.policiesDir =
       policiesDir ||
       path.join(__dirname, "..", "policies");
+    // Wire console-alert observer so invalid transitions surface as ALERT log lines
+    this.stateMachine = new ProtocolStateMachine({
+      observers: [createConsoleAlertObserver("[VAG-004][PolicyEngine]")],
+    });
     this.checkOpaAvailability();
+  }
+
+  /**
+   * Returns the current snapshot of the internal protocol state machine.
+   * Useful for health checks and dashboard telemetry (VAG-004).
+   */
+  getStateMachineSnapshot() {
+    return this.stateMachine.snapshot();
   }
 
   /**
@@ -139,6 +162,22 @@ export class PolicyEngine {
    * Evaluate PR data against policies
    */
   async evaluate(prData: PRData): Promise<EvaluationResult> {
+    // --- VAG-004: advance state machine to SCANNING -------------------------
+    const scanId = `pr-${prData.pull_request.number}-${Date.now()}`;
+    const smStart: ProtocolEvent = {
+      type: "SCAN_STARTED",
+      scanId,
+      target: prData.pull_request.head_branch,
+      timestamp: Date.now(),
+    };
+    const { error: startErr } = this.stateMachine.tryApply(smStart);
+    if (startErr) {
+      const alert = buildStateMachineAlert(startErr, { prNumber: prData.pull_request.number });
+      console.error(
+        `[VAG-004][PolicyEngine] Protocol invariant violation on SCAN_STARTED: ${alert.message}`
+      );
+    }
+
     // Run overflow checker on modified files
     const overflowFindings = await this.overflowChecker.checkFiles(
       prData.files_modified
@@ -150,49 +189,118 @@ export class PolicyEngine {
       overflow_findings: overflowFindings,
     };
 
-    if (!this.opaAvailable) {
-      const result = await this.evaluateWithoutOPA(enrichedPrData);
-      result.overflow_findings = overflowFindings;
-      this.applyPolicyBundleVerification(result);
-      return result;
-    }
+    let result: EvaluationResult;
 
     try {
-      const result = await this.evaluateWithOPA(enrichedPrData);
-      result.overflow_findings = overflowFindings;
-      this.applyPolicyBundleVerification(result);
-      return result;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.error(
-        "[PolicyEngine] CRITICAL: OPA evaluation failed — failing closed (no fallback).",
-        error
-      );
-    
+      if (!this.opaAvailable) {
+        result = await this.evaluateWithoutOPA(enrichedPrData);
+        result.overflow_findings = overflowFindings;
+        this.applyPolicyBundleVerification(result);
+      } else {
+        try {
+          result = await this.evaluateWithOPA(enrichedPrData);
+          result.overflow_findings = overflowFindings;
+          this.applyPolicyBundleVerification(result);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          console.error(
+            "[PolicyEngine] CRITICAL: OPA evaluation failed — failing closed (no fallback).",
+            error
+          );
+
+          const violation: PolicyViolation = {
+            rule: "OPA_EVALUATION_FAILED",
+            severity: "CRITICAL",
+            message:
+              "❌ Primary OPA policy evaluator failed — PR blocked (fail-closed)",
+            detail:
+              `OPA crashed, timed out, or returned invalid output. ` +
+              `Fallback evaluator was NOT used. Error: ${message}`,
+          };
+
+          result = {
+            status: "NON_COMPLIANT",
+            violations: [violation],
+            warnings: [],
+            summary: "❌ OPA evaluation failed — failing closed",
+            violations_count: 1,
+            warnings_count: 0,
+            high_severity_violations: [violation],
+            overflow_findings: overflowFindings,
+          };
+
+          this.applyPolicyBundleVerification(result);
+        }
+      }
+    } catch (unexpectedError) {
+      // Unexpected error in the evaluation pipeline
+      const message = unexpectedError instanceof Error ? unexpectedError.message : String(unexpectedError);
       const violation: PolicyViolation = {
-        rule: "OPA_EVALUATION_FAILED",
+        rule: "EVALUATION_PIPELINE_ERROR",
         severity: "CRITICAL",
-        message:
-          "❌ Primary OPA policy evaluator failed — PR blocked (fail-closed)",
-        detail:
-          `OPA crashed, timed out, or returned invalid output. ` +
-          `Fallback evaluator was NOT used. Error: ${message}`,
+        message: "❌ Unexpected evaluation pipeline error",
+        detail: message,
       };
-    
-      const result: EvaluationResult = {
+      result = {
         status: "NON_COMPLIANT",
         violations: [violation],
         warnings: [],
-        summary: "❌ OPA evaluation failed — failing closed",
+        summary: "❌ Evaluation pipeline error",
         violations_count: 1,
         warnings_count: 0,
         high_severity_violations: [violation],
         overflow_findings: overflowFindings,
       };
-    
-      this.applyPolicyBundleVerification(result);
-      return result;
     }
+
+    // --- VAG-004: advance state machine to REPORTING/DONE/FAILED ---------------
+    const hasViolations = result.violations.length > 0;
+
+    if (hasViolations) {
+      // Signal that scanning found violations (still moves to REPORTING/DONE)
+      const { error: completedErr } = this.stateMachine.tryApply({
+        type: "SCAN_COMPLETED",
+        scanId,
+        findingCount: result.violations.length,
+        timestamp: Date.now(),
+      });
+      if (completedErr) {
+        const alert = buildStateMachineAlert(completedErr, { prNumber: prData.pull_request.number });
+        console.error(`[VAG-004][PolicyEngine] ${alert.message}`);
+      }
+    } else {
+      const { error: completedErr } = this.stateMachine.tryApply({
+        type: "SCAN_COMPLETED",
+        scanId,
+        findingCount: 0,
+        timestamp: Date.now(),
+      });
+      if (completedErr) {
+        const alert = buildStateMachineAlert(completedErr, { prNumber: prData.pull_request.number });
+        console.error(`[VAG-004][PolicyEngine] ${alert.message}`);
+      }
+    }
+
+    // Deliver the report — move to DONE
+    const { error: deliveredErr } = this.stateMachine.tryApply({
+      type: "REPORT_DELIVERED",
+      scanId,
+      reportHash: "",
+      timestamp: Date.now(),
+    });
+    if (deliveredErr) {
+      const alert = buildStateMachineAlert(deliveredErr, { prNumber: prData.pull_request.number });
+      console.error(`[VAG-004][PolicyEngine] ${alert.message}`);
+    }
+
+    // Reset the state machine so it's ready for the next PR evaluation
+    this.stateMachine.tryApply({
+      type: "RESET",
+      requestedBy: "PolicyEngine",
+      timestamp: Date.now(),
+    });
+
+    return result;
   }
 
   /**

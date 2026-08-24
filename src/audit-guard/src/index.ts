@@ -105,6 +105,27 @@ export {
   WebhookNetworkError,
 } from "./multisig-webhook-notifier";
 
+// Issue #172 / VAG-004: Internal Protocol-Invariant State Machine
+export { default as ProtocolStateMachine, createConsoleAlertObserver, buildStateMachineAlert } from "./protocol-state-machine";
+export type {
+  ProtocolState,
+  ProtocolEvent,
+  TransitionRecord,
+  StateMachineSnapshot,
+  TransitionObserver,
+  ProtocolStateMachineOptions,
+  StateMachineAlertPayload,
+  StateMachineErrorUnion,
+} from "./protocol-state-machine";
+export {
+  StateMachineError,
+  InvalidTransitionError,
+  ScanIdMismatchError,
+  TimestampViolationError,
+  StateMachineShutdownError,
+  InvariantViolationError,
+} from "./protocol-state-machine";
+
 // Issue VAG-009: Anomaly Alert Dispatcher — Dashboard Channel
 export { default as AnomalyAlertDispatcher } from "./anomaly-alert-dispatcher";
 export type {
