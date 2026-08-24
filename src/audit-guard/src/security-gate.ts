@@ -75,8 +75,12 @@ export function evaluateSecurityGate(
     isBlockingSeverity(finding.severity, threshold)
   );
 
-  // Standardize security protocols and improve system resilience
-  const isRustSafetyCompliant = report.target ? true : false;
+  // Standardize security protocols and improve system resilience.
+  // "N/A" was the sentinel the CI workflow wrote when it skipped the scan
+  // entirely. It is truthy, so it satisfied this check and let a scan that
+  // never ran report clean. Treat it as a failed scan.
+  const target = report.target?.trim();
+  const isRustSafetyCompliant = Boolean(target) && target !== "N/A";
   if (!isRustSafetyCompliant) {
     return {
       passed: false,
