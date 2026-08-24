@@ -7,6 +7,8 @@ import {
   RelayerMetrics,
   threatFetcher,
   persistNonceMap,
+  acquireNonceDbLock,
+  lockPathFor,
 } from "../src/index";
 
 const now = Date.now();
@@ -73,7 +75,7 @@ describe("anomaly-detector", () => {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     });
   
-    it("merges concurrent logical writers instead of last-writer-wins clobber", () => {
+    it("merges concurrent logical writers instead of last-writer-wins clobber", async () => {
       // Each call only knows about its own address — the old saveNonces
       // pattern (write full local map) would erase the other addresses.
       const writers = 16;
@@ -81,7 +83,7 @@ describe("anomaly-detector", () => {
   
       for (let round = 1; round <= iterations; round++) {
         for (let i = 0; i < writers; i++) {
-          persistNonceMap(dbPath, { [`ADDR_${i}`]: round });
+          await persistNonceMap(dbPath, { [`ADDR_${i}`]: round });
         }
       }
   
@@ -95,16 +97,114 @@ describe("anomaly-detector", () => {
         expect(finalState[`ADDR_${i}`]).toBe(iterations);
       }
     });
-  
-    it("keeps the higher nonce when two writers update the same address", () => {
-      persistNonceMap(dbPath, { SHARED: 5 });
-      persistNonceMap(dbPath, { SHARED: 3 }); // stale writer
-      persistNonceMap(dbPath, { SHARED: 9 });
-  
+
+    it("keeps the higher nonce when two writers update the same address", async () => {
+      await persistNonceMap(dbPath, { SHARED: 5 });
+      await persistNonceMap(dbPath, { SHARED: 3 }); // stale writer
+      await persistNonceMap(dbPath, { SHARED: 9 });
+
       const finalState = JSON.parse(
         fs.readFileSync(dbPath, "utf-8")
       ) as Record<string, number>;
       expect(finalState.SHARED).toBe(9);
+    });
+  });
+
+  describe("nonce-db async lock (Issue #346)", () => {
+    let tmpDir: string;
+    let dbPath: string;
+
+    beforeEach(() => {
+      tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nonce-db-lock-"));
+      dbPath = path.join(tmpDir, "nonce-db.json");
+    });
+
+    afterEach(() => {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    it("yields to the event loop while the lock is contended (no busy-wait)", async () => {
+      const lockDir = lockPathFor(dbPath);
+      fs.mkdirSync(lockDir); // simulate a lock held by another process
+
+      const acquire = acquireNonceDbLock(dbPath, 2000, 60_000, 50);
+      const started = Date.now();
+      // A 100ms timer must fire while acquire is still retrying.
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const timerLatency = Date.now() - started;
+
+      // Generous bounds: fires on schedule, but not delayed by a busy-wait
+      // (a synchronous spin would hold the loop until the lock is released).
+      expect(timerLatency).toBeGreaterThanOrEqual(80);
+      expect(timerLatency).toBeLessThan(200);
+
+      fs.rmSync(lockDir, { recursive: true, force: true });
+      await expect(acquire).resolves.toBe(lockDir);
+    });
+
+    it("reclaims a lock directory older than the max age", async () => {
+      const lockDir = lockPathFor(dbPath);
+      fs.mkdirSync(lockDir);
+      fs.writeFileSync(
+        path.join(lockDir, "owner.json"),
+        JSON.stringify({ pid: 424242, acquiredAt: Date.now() - 120_000 }),
+        "utf-8"
+      );
+
+      const merged = await persistNonceMap(dbPath, { STALE_OWNER: 11 });
+      expect(merged.STALE_OWNER).toBe(11);
+      expect(fs.existsSync(lockDir)).toBe(false); // released after the write
+    });
+
+    it("reclaims an orphaned lock directory (no owner metadata) by mtime", async () => {
+      const lockDir = lockPathFor(dbPath);
+      fs.mkdirSync(lockDir);
+      const ancient = new Date(Date.now() - 120_000);
+      fs.utimesSync(lockDir, ancient, ancient);
+
+      const merged = await persistNonceMap(dbPath, { ORPHANED: 4 });
+      expect(merged.ORPHANED).toBe(4);
+      expect(fs.existsSync(lockDir)).toBe(false);
+    });
+
+    it("does not reclaim a fresh lock held by another process", async () => {
+      const lockDir = lockPathFor(dbPath);
+      fs.mkdirSync(lockDir);
+      fs.writeFileSync(
+        path.join(lockDir, "owner.json"),
+        JSON.stringify({ pid: 424242, acquiredAt: Date.now() }),
+        "utf-8"
+      );
+
+      await expect(
+        acquireNonceDbLock(dbPath, 100, 60_000, 10)
+      ).rejects.toThrow(/Timed out after/);
+    });
+
+    it("surfaces a persistence failure as an alert, not just a console line", async () => {
+      const lockDir = lockPathFor(path.join(__dirname, "nonce-db.json"));
+      const originalTimeout = process.env.NONCE_DB_LOCK_TIMEOUT_MS;
+      process.env.NONCE_DB_LOCK_TIMEOUT_MS = "150";
+      try {
+        fs.mkdirSync(lockDir, { recursive: true });
+        fs.writeFileSync(
+          path.join(lockDir, "owner.json"),
+          JSON.stringify({ pid: 424242, acquiredAt: Date.now() }),
+          "utf-8"
+        );
+
+        const alerts = await runOnce([base]);
+        expect(
+          alerts.some((a) => a.type === "NONCE_DB_PERSIST_FAILURE")
+        ).toBe(true);
+      } finally {
+        fs.rmSync(lockDir, { recursive: true, force: true });
+        if (originalTimeout === undefined) {
+          delete process.env.NONCE_DB_LOCK_TIMEOUT_MS;
+        } else {
+          process.env.NONCE_DB_LOCK_TIMEOUT_MS = originalTimeout;
+        }
+      }
     });
   });
 });

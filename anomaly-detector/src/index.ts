@@ -118,7 +118,7 @@ export interface RelayerMetrics {
 }
 
 export interface AnomalyAlert {
-  type: "NONCE_SPIKE" | "FAILED_TX_BURST" | "UNAUTHORIZED_ADDRESS" | "THREAT_FEED_MATCH" | "NONCE_REUSE" | "RELAYER_LATENCY_HIGH";
+  type: "NONCE_SPIKE" | "FAILED_TX_BURST" | "UNAUTHORIZED_ADDRESS" | "THREAT_FEED_MATCH" | "NONCE_REUSE" | "RELAYER_LATENCY_HIGH" | "NONCE_DB_PERSIST_FAILURE";
   severity: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
   address?: string;
   detail: string;
@@ -201,38 +201,105 @@ function loadNonces(): [string, number][] {
   return Object.entries(loadNoncesFrom(DB_PATH));
 }
 
-function lockPathFor(dbPath: string): string {
+export function lockPathFor(dbPath: string): string {
   return `${dbPath}.lock`;
 }
 
-function acquireNonceDbLock(dbPath: string, timeoutMs = 5000): string {
+interface LockOwnerInfo {
+  pid: number;
+  acquiredAt: number;
+}
+
+function ownerInfoPathFor(lockDir: string): string {
+  return path.join(lockDir, "owner.json");
+}
+
+function readLockOwnerInfo(lockDir: string): LockOwnerInfo | null {
+  try {
+    const raw = fs.readFileSync(ownerInfoPathFor(lockDir), "utf-8");
+    const parsed = JSON.parse(raw) as Partial<LockOwnerInfo>;
+    if (typeof parsed.acquiredAt === "number" && typeof parsed.pid === "number") {
+      return { pid: parsed.pid, acquiredAt: parsed.acquiredAt };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function lockAgeMs(lockDir: string): number | null {
+  const owner = readLockOwnerInfo(lockDir);
+  if (owner) {
+    return Date.now() - owner.acquiredAt;
+  }
+  // Orphaned lock with no owner metadata (e.g. created by an older build):
+  // fall back to the directory mtime.
+  try {
+    return Date.now() - fs.statSync(lockDir).mtimeMs;
+  } catch {
+    return null;
+  }
+}
+
+function writeLockOwnerInfo(lockDir: string): void {
+  const owner: LockOwnerInfo = { pid: process.pid, acquiredAt: Date.now() };
+  fs.writeFileSync(ownerInfoPathFor(lockDir), JSON.stringify(owner), "utf-8");
+}
+
+/**
+ * Acquire an exclusive lock on the nonce db (Issue #346).
+ *
+ * Async: between attempts we yield to the event loop with a setTimeout promise
+ * instead of busy-waiting, so a contended lock can no longer peg a core or
+ * stall anomaly detection / HTTP handling.
+ *
+ * Each lock records the owning PID and an acquisition timestamp in owner.json.
+ * A lock older than `maxAgeMs` is assumed orphaned (the holder died between
+ * mkdir and rmdir) and is reclaimed automatically, so nonce state keeps being
+ * persisted after a crash.
+ */
+export async function acquireNonceDbLock(
+  dbPath: string,
+  timeoutMs = Number(process.env.NONCE_DB_LOCK_TIMEOUT_MS ?? 5000),
+  maxAgeMs = Number(process.env.NONCE_DB_LOCK_MAX_AGE_MS ?? 30_000),
+  retryDelayMs = Number(process.env.NONCE_DB_LOCK_RETRY_MS ?? 50)
+): Promise<string> {
   const lockDir = lockPathFor(dbPath);
   const start = Date.now();
-  while (true) {
+  for (;;) {
     try {
       fs.mkdirSync(lockDir);
+      writeLockOwnerInfo(lockDir);
       return lockDir;
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
       if (code !== "EEXIST") throw err;
+
+      // Stale-lock recovery: reclaim locks older than the max age and retry
+      // immediately — the directory is gone now.
+      const age = lockAgeMs(lockDir);
+      if (age !== null && age > maxAgeMs) {
+        releaseNonceDbLock(lockDir);
+        continue;
+      }
+
       if (Date.now() - start > timeoutMs) {
         throw new Error(
           `Timed out after ${timeoutMs}ms waiting for nonce-db lock: ${lockDir}`
         );
       }
-      const waitUntil = Date.now() + 10;
-      while (Date.now() < waitUntil) {
-        /* brief spin before retry */
-      }
+
+      // Yield to the event loop instead of spinning.
+      await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
     }
   }
 }
 
 function releaseNonceDbLock(lockDir: string): void {
   try {
-    fs.rmdirSync(lockDir);
+    fs.rmSync(lockDir, { recursive: true, force: true });
   } catch {
-    // Best-effort unlock; next writer may recover after timeout.
+    // Best-effort unlock; a stale lock is reclaimed by the next writer.
   }
 }
 
@@ -262,11 +329,11 @@ function atomicWriteJson(filePath: string, data: unknown): void {
  * concurrent writers cannot clobber each other, then atomically replaces
  * the db file via temp + rename.
  */
-export function persistNonceMap(
+export async function persistNonceMap(
   dbPath: string,
   local: Record<string, number>
-): Record<string, number> {
-  const lockDir = acquireNonceDbLock(dbPath);
+): Promise<Record<string, number>> {
+  const lockDir = await acquireNonceDbLock(dbPath);
   try {
     const onDisk = loadNoncesFrom(dbPath);
     const merged: Record<string, number> = { ...onDisk };
@@ -284,19 +351,19 @@ export function persistNonceMap(
   }
 }
 
-function saveNonces(): void {
+async function saveNonces(): Promise<void> {
   const local: Record<string, number> = {};
   for (const [addr, nonce] of previousNonces.entries()) {
     local[addr] = nonce;
   }
-  const merged = persistNonceMap(DB_PATH, local);
+  const merged = await persistNonceMap(DB_PATH, local);
   previousNonces.clear();
   for (const [addr, nonce] of Object.entries(merged)) {
     previousNonces.set(addr, nonce);
   }
 }
 
-function analyze(metrics: RelayerMetrics[]): AnomalyAlert[] {
+async function analyze(metrics: RelayerMetrics[]): Promise<AnomalyAlert[]> {
   const detected: AnomalyAlert[] = [];
 
   for (const m of metrics) {
@@ -357,8 +424,20 @@ function analyze(metrics: RelayerMetrics[]): AnomalyAlert[] {
     }
   }
 
-    saveNonces();
-    return detected;
+  // Persist merged nonce state under the async lock. A persistence failure
+  // must surface as an alert (Issue #346) rather than being swallowed by the
+  // poll loop's generic catch.
+  try {
+    await saveNonces();
+  } catch (err) {
+    detected.push({
+      type: "NONCE_DB_PERSIST_FAILURE",
+      severity: "CRITICAL",
+      detail: `Nonce state persistence failed: ${(err as Error).message}`,
+      timestamp: Date.now(),
+    });
+  }
+  return detected;
 }
 
 async function fetchMetrics(): Promise<RelayerMetrics[]> {
@@ -424,7 +503,7 @@ export async function runOnce(metrics: RelayerMetrics[]): Promise<AnomalyAlert[]
     );
   }
 
-  const found = analyze(accepted);
+  const found = await analyze(accepted);
   found.forEach(emit);
   return found;
 }
