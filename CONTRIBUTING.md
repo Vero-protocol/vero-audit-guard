@@ -147,3 +147,6 @@ If you add a new top-level sub-package or significantly shift ownership of an ex
 8. Fill in the repository PR description completely — state what was completed from the issue.
 
 Do not commit `.env`, keypairs, or report JSON that may contain sensitive paths.
+
+## Pull Request Guidelines
+When opening a Pull Request, please ensure you complete all sections of the automatically populated [PR Template](.github/PULL_REQUEST_TEMPLATE.md), including explicitly linking the originating issue using `Closes #<number>`.
