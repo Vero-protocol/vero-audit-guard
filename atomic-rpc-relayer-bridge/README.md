@@ -15,15 +15,16 @@ The Vero Protocol's relayer pipeline depends on RPC calls for state queries, tra
 
 The `atomic-rpc-relayer-bridge` mitigates these risks by:
 
-1. **Cross-endpoint verification** — Requests are verified against a secondary endpoint before returning to the caller
-2. **Automatic failover** — If an endpoint fails, the bridge transparently retries on the next priority endpoint
+1. **Cross-endpoint verification** — Replay-safe requests are checked against a majority of distinct RPC endpoints
+2. **Replay-aware failover** — Only `GET` requests and explicitly idempotent requests are retried on priority endpoints
 3. **Request atomicity** — All relayed requests and responses are logged for audit trail compliance
 4. **Configurable policies** — Atomic verification can be disabled for latency-sensitive flows (with explicit trust trade-offs)
 
 ### Atomicity Guarantees
 
-- **Verified responses**: By default, responses are cross-checked against a secondary endpoint to ensure consistency
-- **Fault tolerance**: Automatic retries across configured endpoints with exponential backoff
+- **Verified responses**: By default, replay-safe responses require a majority quorum across distinct endpoints
+- **At-most-once submission by default**: `POST`, `PUT`, and `DELETE` use one upstream request unless the caller explicitly enables idempotency
+- **Fault tolerance**: Replay-safe requests can retry across configured endpoints
 - **Audit logging**: All requests and responses are tracked for incident investigation
 - **Configurable trust model**: Explicit environment flag to disable atomic verification when latency is critical
 
@@ -128,6 +129,9 @@ const response = await bridge.relay({
   endpoint: "/",
   payload: { jsonrpc: "2.0", method: "eth_blockNumber", params: [], id: 1 },
   timestamp: Date.now(),
+  // JSON-RPC commonly transports reads over POST. Declare this call replay-safe
+  // only when its application semantics are idempotent.
+  idempotent: true,
 });
 
 // Access audit trail
@@ -137,8 +141,43 @@ const auditLog = bridge.getAuditLog();
 **Options:**
 - `endpoints`: Array of RPC endpoints with priority weights
 - `timeoutMs`: Request timeout in milliseconds (default: 5000)
-- `maxRetries`: Maximum retry attempts per endpoint (default: 3)
+- `maxRetries`: Maximum total attempts per endpoint for replay-safe requests (default: 3)
 - `requireAtomicVerification`: Enable cross-endpoint verification (default: true)
+- `verificationProjection`: Optional function that selects stable response fields before canonical comparison
+
+**Request replay policy:**
+
+- `GET` is replay-safe by default.
+- `POST`, `PUT`, and `DELETE` issue one upstream request by default, with no failover or cross-verification.
+- `idempotent: true` explicitly declares application-level idempotency, including read-only JSON-RPC methods transported over POST.
+- `idempotencyKey` enables replay and is forwarded in the `Idempotency-Key` header. The upstream service must document and enforce the key; the bridge cannot provide server-side deduplication.
+
+Example using an idempotency key:
+
+```typescript
+await bridge.relay({
+  id: "submit-123",
+  method: "POST",
+  endpoint: "/transactions",
+  payload: signedTransaction,
+  timestamp: Date.now(),
+  idempotencyKey: "submit-123",
+});
+```
+
+Example projecting away endpoint-local ledger metadata:
+
+```typescript
+const bridge = new AtomicRpcRelayerBridge({
+  endpoints,
+  verificationProjection: (_request, response) => {
+    const body = response as { result: { hash: string; status: string } };
+    return { hash: body.result.hash, status: body.result.status };
+  },
+});
+```
+
+The projection must return JSON data. Object keys are sorted recursively before comparison; array order remains significant.
 
 **Methods:**
 - `relay(request)`: Atomically relay a request; returns `BridgeResponse`
@@ -156,6 +195,8 @@ interface BridgeResponse {
   endpointUsed: string;     // URL of the RPC endpoint that succeeded
   latencyMs: number;        // Round-trip time in milliseconds
   timestamp: number;        // Unix timestamp of the response
+  verificationStatus:       // verified, failed, unavailable, or skipped
+    "verified" | "failed" | "unavailable" | "skipped";
 }
 ```
 
@@ -257,15 +298,16 @@ See the `.env.example` and [`../CONTRIBUTING.md`](../CONTRIBUTING.md) for Docker
 
 ### Security (Default)
 
-By default, `requireAtomicVerification` is `true`. The bridge cross-checks responses against a secondary endpoint before returning to the caller.
+By default, `requireAtomicVerification` is `true`. The bridge cross-checks replay-safe responses against all distinct secondary endpoints and requires a majority of configured voters. Endpoint identity uses the normalized effective request URL, so equivalent URL spellings cannot count as independent votes. State-changing requests without an explicit idempotency opt-in are executed once and report verification as `skipped`.
 
 **Guarantees:**
-- Single RPC endpoint cannot falsify responses
-- Requires ≥2 configured endpoints
+- A single RPC endpoint cannot satisfy a multi-endpoint quorum
+- Requires ≥2 distinct configured endpoints for verification
+- Distinguishes explicit disagreement (`failed`) from insufficient reachable votes (`unavailable`)
 
 **Trade-off:**
 - Latency increases (extra round-trip to secondary endpoint)
-- Availability depends on all endpoints being responsive
+- Verification availability depends on enough endpoints being responsive to form a majority
 
 ### Performance (Opt-in)
 
@@ -295,8 +337,11 @@ npm test
 ```
 
 Tests cover:
-- Request relaying and failover logic
-- Atomic verification cross-checks
+- At-most-once submission for non-idempotent methods
+- Explicit idempotency opt-in and `Idempotency-Key` forwarding
+- Replay-safe retry and failover logic
+- Canonical, projected response comparison
+- Majority quorum and unavailable-versus-failed verification
 - Endpoint priority ordering
 - Audit log tracking
 - HTTP server endpoints and authentication
@@ -334,23 +379,30 @@ See the root [`README.md`](../README.md) for the full architecture and [`CONTRIB
 
 ### Atomic Verification Fails
 
-1. Confirm both endpoints are returning consistent data:
+1. Confirm enough distinct endpoints are returning consistent projected data:
    ```bash
    curl -X POST http://rpc1 -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
    curl -X POST http://rpc2 -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
    ```
 
-2. Check for timing issues: ensure secondary endpoint is responsive within the `timeoutMs` window.
+2. Check for timing issues: ensure enough secondary endpoints are responsive within the `timeoutMs` window. An unreachable voter produces `unavailable` only when the remaining matching responses cannot form a quorum; it does not trigger a retry by itself.
 
-3. If endpoints legitimately differ, consider disabling verification (with caution) or adding a third endpoint for consensus.
+3. If endpoints differ only in ledger height, timestamps, or endpoint-local metadata, configure `verificationProjection` to compare stable fields. Do not remove fields that affect the semantic result.
 
 ### High Latency with Atomic Verification Enabled
 
-The bridge makes two RPC calls per request (primary + secondary verification). If this latency is unacceptable for your use case:
+The bridge queries all distinct secondary endpoints for each replay-safe verification pass. If this latency is unacceptable for your use case:
 
 1. Use faster/closer RPC endpoints
 2. Increase `timeoutMs` to allow slower endpoints more time
 3. Consider disabling atomic verification **only after security review** (set `DISABLE_ATOMIC_VERIFICATION=true`)
+
+## Standards and Trust Boundaries
+
+- [RFC 9110 §9.2.2](https://www.rfc-editor.org/rfc/rfc9110.html#section-9.2.2) defines idempotent HTTP semantics and cautions against automatic retries of non-idempotent requests.
+- [RFC 8259](https://www.rfc-editor.org/rfc/rfc8259.html) defines JSON objects as unordered and arrays as ordered.
+- The deterministic comparison follows the recursive object-key ordering and array preservation described by [RFC 8785](https://www.rfc-editor.org/rfc/rfc8785.html#section-3.2.3), but is not advertised as a complete JCS implementation.
+- `Idempotency-Key` remains an IETF work in progress. A generic client cannot assume that an upstream enforces the header; verify the provider contract before enabling replay.
 
 ## Contributing
 

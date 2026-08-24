@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Security
+- Prevent duplicate state-changing RPC submissions by requiring explicit idempotency before retries or cross-verification; add canonical projected quorum verification with distinct unavailable and failed outcomes (#348).
 - Added fail-closed audit report verification against exact Stellar transactions, trusted anchor accounts, and full SHA-256 `MEMO_HASH` values, with explicit legacy support (#306).
 - Fail closed when OPA policy evaluation crashes or times out instead of silently using the weaker TypeScript fallback (#301).
 ### Fixed
