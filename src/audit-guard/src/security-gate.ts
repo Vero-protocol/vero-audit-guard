@@ -65,6 +65,36 @@ export interface SecurityGateResult {
   error?: string;
 }
 
+function hasAnalyzedTarget(target: unknown): target is string {
+  if (typeof target !== "string") return false;
+
+  const normalizedTarget = target.trim();
+  return normalizedTarget !== "" && normalizedTarget !== "N/A";
+}
+
+function invalidTargetResult(
+  threshold: number,
+  findings: ScannerFinding[],
+  governanceFindings: GovernanceFinding[]
+): SecurityGateResult {
+  const blockingFindings = findings.filter((finding) =>
+    isBlockingSeverity(finding.severity, threshold)
+  );
+  const blockingGovernanceFindings = governanceFindings.filter((finding) =>
+    isBlockingSeverity(finding.severity, threshold)
+  );
+
+  return {
+    passed: false,
+    threshold,
+    totalFindings: findings.length + governanceFindings.length,
+    blockingFindings,
+    blockingGovernanceFindings,
+    summary: "Build blocked — scan report target is missing or analysis was skipped.",
+    error: "INVALID_REPORT",
+  };
+}
+
 export function severityRank(severity: string): number | null {
   const normalized = severity.toUpperCase() as ScannerSeverity;
   return SEVERITY_RANK[normalized] ?? null;
@@ -85,10 +115,13 @@ export function evaluateSecurityGate(
   report: ScannerReport,
   threshold: number = DEFAULT_SEVERITY_THRESHOLD
 ): SecurityGateResult {
-  // Requirement: Integration with existing Audit-Guard API
-  // Requirement: Adherence to Rust safety standards
   const findings = report.findings ?? [];
   const governanceFindings = report.governance_findings ?? [];
+
+  // Keep direct programmatic callers fail-closed as well as JSON callers.
+  if (!hasAnalyzedTarget(report.target)) {
+    return invalidTargetResult(threshold, findings, governanceFindings);
+  }
 
   const blockingFindings = findings.filter((finding) =>
     isBlockingSeverity(finding.severity, threshold)
@@ -103,23 +136,6 @@ export function evaluateSecurityGate(
   );
 
   const totalBlocking = blockingFindings.length + blockingGovernanceFindings.length;
-
-  // Standardize security protocols and improve system resilience.
-  // "N/A" was the sentinel the CI workflow wrote when it skipped the scan
-  // entirely. It is truthy, so it satisfied this check and let a scan that
-  // never ran report clean. Treat it as a failed scan.
-  const target = report.target?.trim();
-  const isRustSafetyCompliant = Boolean(target) && target !== "N/A";
-  if (!isRustSafetyCompliant) {
-    return {
-      passed: false,
-      threshold,
-      totalFindings: findings.length + governanceFindings.length,
-      blockingFindings,
-      blockingGovernanceFindings,
-      summary: `Build blocked — Target analysis missing for Rust safety standards integration.`,
-    };
-  }
 
   if (totalBlocking > 0) {
     return {
@@ -141,8 +157,8 @@ export function evaluateSecurityGate(
     blockingGovernanceFindings: [],
     summary:
       totalFindings === 0
-        ? "Security gate passed — no findings. Rust safety standards adhered."
-        : `Security gate passed — ${totalFindings} finding(s) within threshold. Rust safety standards adhered.`,
+        ? "Security gate passed — no findings."
+        : `Security gate passed — ${totalFindings} finding(s) within threshold.`,
   };
 }
 
@@ -175,6 +191,14 @@ export function evaluateSecurityGateFromJson(
       summary: "Build blocked — scan report is missing a findings array.",
       error: "INVALID_REPORT",
     };
+  }
+
+  if (!hasAnalyzedTarget(report.target)) {
+    return invalidTargetResult(
+      threshold,
+      report.findings,
+      Array.isArray(report.governance_findings) ? report.governance_findings : []
+    );
   }
 
   return evaluateSecurityGate(report, threshold);

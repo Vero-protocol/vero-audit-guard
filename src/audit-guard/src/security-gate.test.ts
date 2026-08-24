@@ -50,6 +50,7 @@ describe("security-gate", () => {
       const result = evaluateSecurityGate(makeReport([]));
       expect(result.passed).toBe(true);
       expect(result.blockingFindings).toHaveLength(0);
+      expect(result.summary).toBe("Security gate passed — no findings.");
     });
 
     it("passes when highest severity is HIGH", () => {
@@ -65,6 +66,9 @@ describe("security-gate", () => {
       );
       expect(result.passed).toBe(true);
       expect(result.totalFindings).toBe(1);
+      expect(result.summary).toBe(
+        "Security gate passed — 1 finding(s) within threshold."
+      );
     });
 
     it("fails when a CRITICAL finding is present", () => {
@@ -119,6 +123,31 @@ describe("security-gate", () => {
       expect(result.error).toBe("INVALID_REPORT");
     });
 
+    it.each(["", "   ", "N/A"])(
+      "fails when the scanner target is %p",
+      (target) => {
+        const result = evaluateSecurityGateFromJson(
+          JSON.stringify({ target, findings: [] })
+        );
+
+        expect(result.passed).toBe(false);
+        expect(result.error).toBe("INVALID_REPORT");
+        expect(result.summary).toBe(
+          "Build blocked — scan report target is missing or analysis was skipped."
+        );
+      }
+    );
+
+    it("fails when the scanner target is missing", () => {
+      const result = evaluateSecurityGateFromJson(
+        JSON.stringify({ findings: [] })
+      );
+
+      expect(result.passed).toBe(false);
+      expect(result.error).toBe("INVALID_REPORT");
+      expect(result.summary).toContain("target is missing");
+    });
+
     it("evaluates a valid scanner report", () => {
       const result = evaluateSecurityGateFromJson(
         JSON.stringify(
@@ -144,7 +173,8 @@ describe("security-gate", () => {
     it("blocks a report whose target is the N/A sentinel", () => {
       const result = evaluateSecurityGate({ target: "N/A", findings: [] });
       expect(result.passed).toBe(false);
-      expect(result.summary).toContain("Target analysis missing");
+      expect(result.error).toBe("INVALID_REPORT");
+      expect(result.summary).toContain("analysis was skipped");
     });
 
     it("blocks a report with an empty or whitespace target", () => {
