@@ -1,6 +1,7 @@
 {
   "name": "vero-atomic-rpc-relayer-bridge",
   "version": "0.1.0",
+  "license": "MIT",
   "description": "Atomic RPC relayer bridge for Vero Protocol",
   "main": "dist/index.js",
   "scripts": {

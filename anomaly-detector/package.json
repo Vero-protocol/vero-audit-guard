@@ -1,6 +1,7 @@
 {
   "name": "vero-anomaly-detector",
   "version": "0.1.0",
+  "license": "MIT",
   "description": "Real-time anomaly detector for the Vero relayer service",
   "main": "dist/anomaly-detector/src/index.js",
   "scripts": {
