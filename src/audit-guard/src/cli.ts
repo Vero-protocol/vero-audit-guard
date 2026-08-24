@@ -307,12 +307,21 @@ async function runSecurityGate(args: string[]): Promise<void> {
   console.log("\n🔒 Security Gate\n");
   console.log(`Threshold : severity rank > ${result.threshold}`);
   console.log(`Findings  : ${result.totalFindings}`);
-  console.log(`Blocking  : ${result.blockingFindings.length}`);
+  console.log(`Blocking  : ${result.blockingFindings.length + result.blockingGovernanceFindings.length}`);
   console.log(`\n${result.summary}\n`);
 
   if (result.blockingFindings.length > 0) {
     console.log("Blocking findings:");
     for (const finding of result.blockingFindings) {
+      console.log(
+        `  [${finding.severity}] ${finding.file}:${finding.line} — ${finding.rule}`
+      );
+    }
+  }
+
+  if (result.blockingGovernanceFindings.length > 0) {
+    console.log("Blocking governance findings:");
+    for (const finding of result.blockingGovernanceFindings) {
       console.log(
         `  [${finding.severity}] ${finding.file}:${finding.line} — ${finding.rule}`
       );
