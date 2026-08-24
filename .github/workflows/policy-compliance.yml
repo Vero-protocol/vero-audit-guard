@@ -87,8 +87,9 @@ jobs:
           EOF
 
         env:
-          ANCHOR_ON_CHAIN: "true"
-          AUDIT_KEYPAIR_SECRET: ${{ secrets.AUDIT_KEYPAIR_SECRET }}
+          # AUDIT_KEYPAIR_SECRET / ANCHOR_ON_CHAIN intentionally omitted:
+          # this workflow runs on unreviewed PR code and must never hold
+          # on-chain anchoring signing authority (see anchor-on-merge.yml).
           CI_RELAYER_SECRET: ${{ secrets.CI_RELAYER_SECRET }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body }}
@@ -110,7 +111,7 @@ jobs:
           FILES=$(curl -s \
             -H "Accept: application/vnd.github+json" \
             -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            "https://api.github.com/repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files?per_page=100" \
+            "https://api.github.com/repos/\( {{ github.repository }}/pulls/ \){{ github.event.pull_request.number }}/files?per_page=100" \
             | jq -r '.[].filename' | jq -R -s -c 'split("\n")[:-1]')
           echo "files=$FILES" >> "$GITHUB_OUTPUT"
 
@@ -189,8 +190,8 @@ jobs:
           GUARDIAN_DASH_TOKEN: ${{ secrets.GUARDIAN_DASH_TOKEN }}
           MAINTENANCE_MODE: ${{ vars.MAINTENANCE_MODE }}
           MAINTENANCE_MESSAGE: ${{ vars.MAINTENANCE_MESSAGE }}
-          ANCHOR_ON_CHAIN: "true"
-          AUDIT_KEYPAIR_SECRET: ${{ secrets.AUDIT_KEYPAIR_SECRET }}
+          # AUDIT_KEYPAIR_SECRET / ANCHOR_ON_CHAIN intentionally omitted —
+          # anchoring is only allowed in anchor-on-merge.yml.
 
       - name: Comment PR with policy result
         if: always()
@@ -205,7 +206,7 @@ jobs:
                 'Status: ⚠️ CHECK FAILED\n\n' +
                 'The policy evaluation step failed to run (no result file). This is usually caused by missing CI secrets for forked PRs or an earlier script error.\n\n' +
                 'Please check the workflow logs.';
-                          if (context.payload.pull_request && context.payload.pull_request.head && context.payload.pull_request.head.repo && context.payload.pull_request.head.repo.full_name !== `${context.repo.owner}/${context.repo.repo}`) {
+                          if (context.payload.pull_request && context.payload.pull_request.head && context.payload.pull_request.head.repo && context.payload.pull_request.head.repo.full_name !== `\( {context.repo.owner}/ \){context.repo.repo}`) {
               console.log('PR from fork; skipping comment/status because the integration cannot access fork repo.');
               return;
             }
@@ -234,7 +235,7 @@ jobs:
             if (result.violations.length > 0) {
               body += '### ❌ Violations\n\n';
               for (const v of result.violations) {
-                body += `- **${v.rule}** [${v.severity}]\n`;
+                body += `- **\( {v.rule}** [ \){v.severity}]\n`;
                 body += `  ${v.message}\n`;
                 body += `  > ${v.detail}\n\n`;
               }
@@ -243,7 +244,7 @@ jobs:
             if (result.warnings.length > 0) {
               body += '### ⚠️ Warnings\n\n';
               for (const w of result.warnings) {
-                body += `- **${w.rule}** [${w.severity}]\n`;
+                body += `- **\( {w.rule}** [ \){w.severity}]\n`;
                 body += `  ${w.message}\n`;
                 body += `  > ${w.detail}\n\n`;
               }
@@ -285,7 +286,7 @@ jobs:
                 state: 'error',
                 description: 'Policy evaluation failed to produce a result.',
                 context: 'Policy Compliance',
-                target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
+                target_url: `\( {context.serverUrl}/ \){context.repo.owner}/\( {context.repo.repo}/actions/runs/ \){context.runId}`
               });
               return;
             }
@@ -301,7 +302,7 @@ jobs:
               state: state,
               description: description,
               context: 'Policy Compliance',
-              target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
+              target_url: `\( {context.serverUrl}/ \){context.repo.owner}/\( {context.repo.repo}/actions/runs/ \){context.runId}`
             });
 
       - name: Fail if violations
