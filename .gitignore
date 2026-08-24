@@ -7,3 +7,4 @@ reports/*.json
 *.secret
 .oncall-state.json
 logs/
+*-db.json
