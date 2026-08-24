@@ -18,7 +18,8 @@
     "security-gate": "ts-node src/security-gate-cli.ts",
     "policy-bundle": "ts-node src/policy-bundle-cli.ts",
     "backup": "ts-node src/backup.ts backup",
-    "restore": "ts-node src/backup.ts restore"
+    "restore": "ts-node src/backup.ts restore",
+    "archive-logs": "ts-node src/archive-cli.ts"
   },
   "keywords": [
     "opa",
