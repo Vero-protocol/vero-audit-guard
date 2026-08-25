@@ -109,8 +109,6 @@ fn rust_source_files(target: &str) -> Vec<PathBuf> {
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| e.path().extension().map(|x| x == "rs").unwrap_or(false))
-        // Exclude test fixtures by path so self-scans don't flag the suite,
-        // without allowing any source line to evade rules via a substring.
         .filter(|e| !is_test_path(e.path()))
         .map(|e| e.into_path())
         .collect()
@@ -166,10 +164,6 @@ fn sha256_of(data: &str) -> String {
     hex::encode(hasher.finalize())
 }
 
-/// Builds a unique, monotonically-distinct nullifier for a single scan
-/// lifecycle run, binding the report hash to a nanosecond timestamp so that
-/// two runs producing an identical report are still treated as distinct
-/// state transitions.
 fn scan_nullifier(report_hash: &str) -> String {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -178,10 +172,6 @@ fn scan_nullifier(report_hash: &str) -> String {
     format!("{report_hash}-{nanos}")
 }
 
-/// Runs the ZK-based state validation hook over a completed scan lifecycle,
-/// verifying that the pre-scan state (the scan target) transitioned into the
-/// post-scan state (the generated report) via a well-formed, non-replayed
-/// proof before the report is trusted downstream.
 fn verify_scan_state_transition(
     hook: &mut ZkStateValidationHook,
     pre_state_root: &str,
@@ -202,7 +192,6 @@ fn main() {
     let (file_count, all_findings) = scan_target(&target, &rules);
     let governance_findings = scan_governance_target(&target);
 
-    // Build report shell; hash filled after successful serialization.
     let combined_report = ScanReport {
         target: target.clone(),
         total_files: file_count,
@@ -211,7 +200,6 @@ fn main() {
         report_hash: String::new(),
     };
 
-    // Serialize findings — exit 2 on failure, nothing written to stdout
     let report_json = match serde_json::to_string_pretty(&combined_report) {
         Ok(json) => json,
         Err(e) => {
@@ -229,9 +217,6 @@ fn main() {
         report_hash: hash.clone(),
     };
 
-    // ZK-based state validation hook: verify the scan target (pre-state)
-    // transitioned into the generated report (post-state) via a well-formed,
-    // non-replayed proof before the report is trusted downstream.
     let nullifier = scan_nullifier(&report.report_hash);
     let mut zk_hook = ZkStateValidationHook::new();
     if let Err(e) =
@@ -251,7 +236,6 @@ fn main() {
     };
     println!("{}", out);
 
-    // Write report to /reports directory — exit 3 on failure
     let root_dir = match env::current_dir() {
         Ok(d) => d,
         Err(e) => {
@@ -287,9 +271,6 @@ fn main() {
         report.governance_findings.len()
     );
 
-    // CRITICAL findings check — exit 1
-    // Both plain static-analysis findings and governance findings are evaluated;
-    // either category containing a CRITICAL severity is sufficient to block the build.
     let critical_findings: Vec<&Finding> = report
         .findings
         .iter()
@@ -305,10 +286,16 @@ fn main() {
     if !critical_findings.is_empty() || !critical_governance.is_empty() {
         eprintln!("[scanner] CRITICAL findings detected — failing build.");
         for f in &critical_findings {
-            eprintln!("[scanner] Blocking finding: [{}] {}:{} — {}", f.severity, f.file, f.line, f.rule);
+            eprintln!(
+                "[scanner] Blocking finding: [{}] {}:{} — {}",
+                f.severity, f.file, f.line, f.rule
+            );
         }
         for f in &critical_governance {
-            eprintln!("[scanner] Blocking governance finding: [{}] {}:{} — {}", f.severity, f.file, f.line, f.rule);
+            eprintln!(
+                "[scanner] Blocking governance finding: [{}] {}:{} — {}",
+                f.severity, f.file, f.line, f.rule
+            );
         }
         std::process::exit(1);
     }
@@ -356,56 +343,9 @@ mod tests {
         fs::remove_dir_all(dir).expect("test directory should be removed");
     }
 
-    // A file containing `fn withdraw() { transfer(); }` matches the
-    // UNSAFE_SINGLE_SIG_WITHDRAWAL governance rule at severity CRITICAL.
-    // scan_governance_target must return at least one CRITICAL finding for
-    // such a fixture, which the build-gate in main() then converts to exit 1.
-    #[test]
-    fn scan_governance_target_detects_critical_single_sig_withdrawal() {
-        let dir = temp_scan_dir();
-        fs::write(
-            dir.join("treasury.rs"),
-            "pub fn withdraw(env: Env) { token::transfer(env, amount); }\n",
-        )
-        .expect("treasury.rs should be written");
-
-        let target = dir.to_string_lossy();
-        let findings = scan_governance_target(&target);
-
-        assert!(
-            findings.iter().any(|f| f.rule == "UNSAFE_SINGLE_SIG_WITHDRAWAL" && f.severity == "CRITICAL"),
-            "expected a CRITICAL UNSAFE_SINGLE_SIG_WITHDRAWAL governance finding, got: {:?}",
-            findings
-        );
-
-        fs::remove_dir_all(dir).expect("test directory should be removed");
-    }
-
-    #[test]
-    fn scan_governance_target_returns_no_critical_for_safe_code() {
-        let dir = temp_scan_dir();
-        fs::write(
-            dir.join("safe.rs"),
-            "pub fn execute_proposal(env: Env) { require!(signers.len() >= threshold); }\n",
-        )
-        .expect("safe.rs should be written");
-
-        let target = dir.to_string_lossy();
-        let findings = scan_governance_target(&target);
-
-        assert!(
-            !findings.iter().any(|f| f.severity == "CRITICAL"),
-            "expected no CRITICAL governance findings for safe code, got: {:?}",
-            findings
-        );
-
-        fs::remove_dir_all(dir).expect("test directory should be removed");
-    }
-
     #[test]
     fn line_with_unsafe_and_fs_write_substring_still_reports_unsafe_block() {
         let dir = temp_scan_dir();
-        // Magic substring must NOT suppress UNSAFE_BLOCK
         fs::write(
             dir.join("evil.rs"),
             "fn x() { unsafe { transmute(x) } // fs::write(dir.join\n}\n",
@@ -448,10 +388,6 @@ mod tests {
         fs::remove_dir_all(dir).expect("cleanup");
     }
 
-    // A file containing `fn withdraw() { transfer(); }` matches the
-    // UNSAFE_SINGLE_SIG_WITHDRAWAL governance rule at severity CRITICAL.
-    // scan_governance_target must return at least one CRITICAL finding for
-    // such a fixture, which the build-gate in main() then converts to exit 1.
     #[test]
     fn scan_governance_target_detects_critical_single_sig_withdrawal() {
         let dir = temp_scan_dir();
@@ -515,8 +451,6 @@ mod tests {
         let mut hook = ZkStateValidationHook::new();
         let nullifier = scan_nullifier(&post);
 
-        // Build the proof against the real post-state, then swap in a
-        // tampered post-state root so the commitment no longer matches.
         let mut proof = StateTransitionProof::new(pre, post, nullifier);
         proof.post_state_root = tampered_post;
 
@@ -550,4 +484,4 @@ mod tests {
             Err(ZkStateError::NoOpTransition)
         );
     }
-                        }
+                }
