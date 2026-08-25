@@ -83,12 +83,16 @@ vero-audit-guard/
 ├── docker-compose.yml       # Local multi-service pipeline
 ├── .github/workflows/
 │   ├── security-scan.yml    # PR-gated CI pipeline
-│   └── policy-compliance.yml # OPA policy compliance checks
+│   ├── policy-compliance.yml # OPA policy compliance checks
+│   └── anchor-on-merge.yml  # Anchors audit trail on merge to main
 ├── BUILD_GUARD.sh           # Local automation script
 ├── CONTRIBUTING.md          # Contributor + compose workflow
 ├── POLICY_AS_CODE.md        # Policy engine documentation
 ├── INCIDENT_RESPONSE.md     # Emergency runbook
-└── VULNERABILITY_DISCLOSURE.md  # Bug bounty & reporting
+├── VULNERABILITY_DISCLOSURE.md  # Bug bounty & reporting
+├── SECURITY.md              # Security policy & reporting
+├── CHANGELOG.md             # Release history
+└── TODO.md                  # Pending work tracker
 ```
 
 ---
