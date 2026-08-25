@@ -80,12 +80,7 @@ fn scan_file(path: &Path, rules: &[CompiledRule]) -> (bool, Vec<Finding>) {
     let mut findings = Vec::new();
 
     for (lineno, line) in content.lines().enumerate() {
-        // Skip scanning lines that appear to be part of the scanner's own test suite
-        // to avoid false positives when the scanner analyzes its own source code.
-        if line.contains("fs::write(dir.join") {
-            continue;
-        }
-
+        // No line-level substring skips — every rule is applied to every line.
         for rule in rules {
             if rule.regex.is_match(line) {
                 findings.push(Finding {
@@ -101,11 +96,22 @@ fn scan_file(path: &Path, rules: &[CompiledRule]) -> (bool, Vec<Finding>) {
     (true, findings)
 }
 
+/// True when a path component is a conventional test directory name.
+fn is_test_path(path: &Path) -> bool {
+    path.components().any(|c| {
+        let s = c.as_os_str().to_string_lossy();
+        s == "tests" || s == "test" || s == "__tests__"
+    })
+}
+
 fn rust_source_files(target: &str) -> Vec<PathBuf> {
     WalkDir::new(target)
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| e.path().extension().map(|x| x == "rs").unwrap_or(false))
+        // Exclude test fixtures by path so self-scans don't flag the suite,
+        // without allowing any source line to evade rules via a substring.
+        .filter(|e| !is_test_path(e.path()))
         .map(|e| e.into_path())
         .collect()
 }
@@ -282,8 +288,34 @@ fn main() {
     );
 
     // CRITICAL findings check — exit 1
-    if report.findings.iter().any(|f| f.severity == "CRITICAL") {
+    // Both plain static-analysis findings and governance findings are evaluated;
+    // either category containing a CRITICAL severity is sufficient to block the build.
+    let critical_findings: Vec<&Finding> = report
+        .findings
+        .iter()
+        .filter(|f| f.severity == "CRITICAL")
+        .collect();
+
+    let critical_governance: Vec<&GovernanceFinding> = report
+        .governance_findings
+        .iter()
+        .filter(|f| f.severity == "CRITICAL")
+        .collect();
+
+    if !critical_findings.is_empty() || !critical_governance.is_empty() {
         eprintln!("[scanner] CRITICAL findings detected — failing build.");
+        for f in &critical_findings {
+            eprintln!(
+                "[scanner] Blocking finding: [{}] {}:{} — {}",
+                f.severity, f.file, f.line, f.rule
+            );
+        }
+        for f in &critical_governance {
+            eprintln!(
+                "[scanner] Blocking governance finding: [{}] {}:{} — {}",
+                f.severity, f.file, f.line, f.rule
+            );
+        }
         std::process::exit(1);
     }
 
@@ -326,6 +358,100 @@ mod tests {
         assert!(findings.iter().any(|f| f.rule == "UNSAFE_UNWRAP"));
         assert!(findings.iter().any(|f| f.rule == "UNSAFE_BLOCK"));
         assert!(findings.iter().any(|f| f.rule == "EXPLICIT_PANIC"));
+
+        fs::remove_dir_all(dir).expect("test directory should be removed");
+    }
+
+    #[test]
+    fn line_with_unsafe_and_fs_write_substring_still_reports_unsafe_block() {
+        let dir = temp_scan_dir();
+        // Magic substring must NOT suppress UNSAFE_BLOCK
+        fs::write(
+            dir.join("evil.rs"),
+            "fn x() { unsafe { transmute(x) } // fs::write(dir.join\n}\n",
+        )
+        .expect("evil.rs should be written");
+
+        let rules = compile_rules(RULES);
+        let target = dir.to_string_lossy();
+        let (_count, findings) = scan_target(&target, &rules);
+
+        assert!(
+            findings.iter().any(|f| f.rule == "UNSAFE_BLOCK"),
+            "expected UNSAFE_BLOCK even when line contains fs::write(dir.join, got: {:?}",
+            findings
+        );
+
+        fs::remove_dir_all(dir).expect("test directory should be removed");
+    }
+
+    #[test]
+    fn files_under_tests_directory_are_not_scanned() {
+        let dir = temp_scan_dir();
+        let tests_dir = dir.join("tests");
+        fs::create_dir_all(&tests_dir).expect("tests dir");
+        fs::write(tests_dir.join("fixture.rs"), "fn t() { unsafe { } }\n")
+            .expect("fixture");
+        fs::write(dir.join("prod.rs"), "fn p() { unwrap(); }\n").expect("prod");
+
+        let rules = compile_rules(RULES);
+        let target = dir.to_string_lossy();
+        let (file_count, findings) = scan_target(&target, &rules);
+
+        assert_eq!(file_count, 1, "only prod.rs should be scanned");
+        assert!(findings.iter().any(|f| f.rule == "UNSAFE_UNWRAP"));
+        assert!(
+            !findings.iter().any(|f| f.file.contains("fixture.rs")),
+            "tests/ fixtures must not produce findings"
+        );
+
+        fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    // A file containing `fn withdraw() { transfer(); }` matches the
+    // UNSAFE_SINGLE_SIG_WITHDRAWAL governance rule at severity CRITICAL.
+    // scan_governance_target must return at least one CRITICAL finding for
+    // such a fixture, which the build-gate in main() then converts to exit 1.
+    #[test]
+    fn scan_governance_target_detects_critical_single_sig_withdrawal() {
+        let dir = temp_scan_dir();
+        fs::write(
+            dir.join("treasury.rs"),
+            "pub fn withdraw(env: Env) { token::transfer(env, amount); }\n",
+        )
+        .expect("treasury.rs should be written");
+
+        let target = dir.to_string_lossy();
+        let findings = scan_governance_target(&target);
+
+        assert!(
+            findings.iter().any(|f| {
+                f.rule == "UNSAFE_SINGLE_SIG_WITHDRAWAL" && f.severity == "CRITICAL"
+            }),
+            "expected a CRITICAL UNSAFE_SINGLE_SIG_WITHDRAWAL governance finding, got: {:?}",
+            findings
+        );
+
+        fs::remove_dir_all(dir).expect("test directory should be removed");
+    }
+
+    #[test]
+    fn scan_governance_target_returns_no_critical_for_safe_code() {
+        let dir = temp_scan_dir();
+        fs::write(
+            dir.join("safe.rs"),
+            "pub fn execute_proposal(env: Env) { require!(signers.len() >= threshold); }\n",
+        )
+        .expect("safe.rs should be written");
+
+        let target = dir.to_string_lossy();
+        let findings = scan_governance_target(&target);
+
+        assert!(
+            !findings.iter().any(|f| f.severity == "CRITICAL"),
+            "expected no CRITICAL governance findings for safe code, got: {:?}",
+            findings
+        );
 
         fs::remove_dir_all(dir).expect("test directory should be removed");
     }
@@ -384,4 +510,4 @@ mod tests {
             Err(ZkStateError::NoOpTransition)
         );
     }
-                        }
+}
