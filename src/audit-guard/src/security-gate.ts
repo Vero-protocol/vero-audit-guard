@@ -86,7 +86,6 @@ export function evaluateSecurityGate(
   threshold: number = DEFAULT_SEVERITY_THRESHOLD
 ): SecurityGateResult {
   // Requirement: Integration with existing Audit-Guard API
-  // Requirement: Adherence to Rust safety standards
   const findings = report.findings ?? [];
   const governanceFindings = report.governance_findings ?? [];
 
@@ -103,23 +102,6 @@ export function evaluateSecurityGate(
   );
 
   const totalBlocking = blockingFindings.length + blockingGovernanceFindings.length;
-
-  // Standardize security protocols and improve system resilience.
-  // "N/A" was the sentinel the CI workflow wrote when it skipped the scan
-  // entirely. It is truthy, so it satisfied this check and let a scan that
-  // never ran report clean. Treat it as a failed scan.
-  const target = report.target?.trim();
-  const isRustSafetyCompliant = Boolean(target) && target !== "N/A";
-  if (!isRustSafetyCompliant) {
-    return {
-      passed: false,
-      threshold,
-      totalFindings: findings.length + governanceFindings.length,
-      blockingFindings,
-      blockingGovernanceFindings,
-      summary: `Build blocked — Target analysis missing for Rust safety standards integration.`,
-    };
-  }
 
   if (totalBlocking > 0) {
     return {
@@ -141,8 +123,8 @@ export function evaluateSecurityGate(
     blockingGovernanceFindings: [],
     summary:
       totalFindings === 0
-        ? "Security gate passed — no findings. Rust safety standards adhered."
-        : `Security gate passed — ${totalFindings} finding(s) within threshold. Rust safety standards adhered.`,
+        ? "Security gate passed — no findings."
+        : `Security gate passed — ${totalFindings} finding(s) within threshold.`,
   };
 }
 
@@ -173,6 +155,21 @@ export function evaluateSecurityGateFromJson(
       blockingFindings: [],
       blockingGovernanceFindings: [],
       summary: "Build blocked — scan report is missing a findings array.",
+      error: "INVALID_REPORT",
+    };
+  }
+
+  // "N/A" is the sentinel the CI workflow writes when a scan is skipped.
+  // It is a non-empty string, but does not identify an analyzed target.
+  const target = report.target?.trim();
+  if (!target || target === "N/A") {
+    return {
+      passed: false,
+      threshold,
+      totalFindings: 0,
+      blockingFindings: [],
+      blockingGovernanceFindings: [],
+      summary: "Build blocked — scan report target is missing, empty, or marked as not analyzed.",
       error: "INVALID_REPORT",
     };
   }
