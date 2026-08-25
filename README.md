@@ -83,12 +83,16 @@ vero-audit-guard/
 ├── docker-compose.yml       # Local multi-service pipeline
 ├── .github/workflows/
 │   ├── security-scan.yml    # PR-gated CI pipeline
-│   └── policy-compliance.yml # OPA policy compliance checks
+│   ├── policy-compliance.yml # OPA policy compliance checks
+│   └── anchor-on-merge.yml  # Anchors audit trail on merge to main
 ├── BUILD_GUARD.sh           # Local automation script
 ├── CONTRIBUTING.md          # Contributor + compose workflow
 ├── POLICY_AS_CODE.md        # Policy engine documentation
 ├── INCIDENT_RESPONSE.md     # Emergency runbook
-└── VULNERABILITY_DISCLOSURE.md  # Bug bounty & reporting
+├── VULNERABILITY_DISCLOSURE.md  # Bug bounty & reporting
+├── SECURITY.md              # Security policy & reporting
+├── CHANGELOG.md             # Release history
+└── TODO.md                  # Pending work tracker
 ```
 
 ---
@@ -185,7 +189,7 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the compose workflow, environment v
 | `POLICY_BUNDLE_SIGNERS`  | audit-guard          | Comma-separated trusted policy-bundle signer public keys |
 
 > **Note on Atomic Verification (`DISABLE_ATOMIC_VERIFICATION`)**:
-> By default, the `atomic-rpc-relayer-bridge` requires atomic verification, meaning it cross-checks responses against a secondary endpoint to ensure trust and data integrity. Setting this to `true` disables this check, which trades off security (unconditionally trusting a single RPC endpoint) in favor of lower latency and higher availability. It is strongly recommended to keep this enabled in production to prevent a single compromised endpoint from falsifying metrics.
+> By default, the `atomic-rpc-relayer-bridge` requires majority verification for replay-safe requests. `POST`, `PUT`, and `DELETE` are submitted once and are not cross-verified unless the caller explicitly declares idempotency or provides an idempotency key. Setting this flag to `true` disables cross-endpoint verification, which trades response integrity for lower latency and higher availability.
 > The only accepted values are `true` and `false`; invalid values stop server initialization instead of silently changing the verification policy.
 
 ---

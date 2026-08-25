@@ -305,16 +305,10 @@ fn main() {
     if !critical_findings.is_empty() || !critical_governance.is_empty() {
         eprintln!("[scanner] CRITICAL findings detected — failing build.");
         for f in &critical_findings {
-            eprintln!(
-                "[scanner] Blocking finding: [{}] {}:{} — {}",
-                f.severity, f.file, f.line, f.rule
-            );
+            eprintln!("[scanner] Blocking finding: [{}] {}:{} — {}", f.severity, f.file, f.line, f.rule);
         }
         for f in &critical_governance {
-            eprintln!(
-                "[scanner] Blocking governance finding: [{}] {}:{} — {}",
-                f.severity, f.file, f.line, f.rule
-            );
+            eprintln!("[scanner] Blocking governance finding: [{}] {}:{} — {}", f.severity, f.file, f.line, f.rule);
         }
         std::process::exit(1);
     }
@@ -358,6 +352,52 @@ mod tests {
         assert!(findings.iter().any(|f| f.rule == "UNSAFE_UNWRAP"));
         assert!(findings.iter().any(|f| f.rule == "UNSAFE_BLOCK"));
         assert!(findings.iter().any(|f| f.rule == "EXPLICIT_PANIC"));
+
+        fs::remove_dir_all(dir).expect("test directory should be removed");
+    }
+
+    // A file containing `fn withdraw() { transfer(); }` matches the
+    // UNSAFE_SINGLE_SIG_WITHDRAWAL governance rule at severity CRITICAL.
+    // scan_governance_target must return at least one CRITICAL finding for
+    // such a fixture, which the build-gate in main() then converts to exit 1.
+    #[test]
+    fn scan_governance_target_detects_critical_single_sig_withdrawal() {
+        let dir = temp_scan_dir();
+        fs::write(
+            dir.join("treasury.rs"),
+            "pub fn withdraw(env: Env) { token::transfer(env, amount); }\n",
+        )
+        .expect("treasury.rs should be written");
+
+        let target = dir.to_string_lossy();
+        let findings = scan_governance_target(&target);
+
+        assert!(
+            findings.iter().any(|f| f.rule == "UNSAFE_SINGLE_SIG_WITHDRAWAL" && f.severity == "CRITICAL"),
+            "expected a CRITICAL UNSAFE_SINGLE_SIG_WITHDRAWAL governance finding, got: {:?}",
+            findings
+        );
+
+        fs::remove_dir_all(dir).expect("test directory should be removed");
+    }
+
+    #[test]
+    fn scan_governance_target_returns_no_critical_for_safe_code() {
+        let dir = temp_scan_dir();
+        fs::write(
+            dir.join("safe.rs"),
+            "pub fn execute_proposal(env: Env) { require!(signers.len() >= threshold); }\n",
+        )
+        .expect("safe.rs should be written");
+
+        let target = dir.to_string_lossy();
+        let findings = scan_governance_target(&target);
+
+        assert!(
+            !findings.iter().any(|f| f.severity == "CRITICAL"),
+            "expected no CRITICAL governance findings for safe code, got: {:?}",
+            findings
+        );
 
         fs::remove_dir_all(dir).expect("test directory should be removed");
     }
@@ -510,4 +550,4 @@ mod tests {
             Err(ZkStateError::NoOpTransition)
         );
     }
-}
+                        }

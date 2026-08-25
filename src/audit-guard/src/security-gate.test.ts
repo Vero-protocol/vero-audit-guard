@@ -1,5 +1,6 @@
 import {
   DEFAULT_SEVERITY_THRESHOLD,
+  GovernanceFinding,
   evaluateSecurityGate,
   evaluateSecurityGateFromJson,
   isBlockingSeverity,
@@ -11,11 +12,21 @@ function makeReport(
     line: number;
     rule: string;
     severity: string;
+  }>,
+  governanceFindings?: Array<{
+    file: string;
+    line: number;
+    rule: string;
+    severity: string;
+    description?: string;
   }>
 ) {
   return {
     target: "test-target",
     findings,
+    ...(governanceFindings !== undefined
+      ? { governance_findings: governanceFindings }
+      : {}),
   };
 }
 
@@ -143,6 +154,118 @@ describe("security-gate", () => {
 
     it("still passes a real target with no findings", () => {
       expect(evaluateSecurityGate(makeReport([])).passed).toBe(true);
+    });
+  });
+
+  describe("governance_findings gating", () => {
+    // Core acceptance criterion: a report whose only CRITICAL entry is in
+    // governance_findings must cause the gate to return passed: false.
+    it("blocks when the only CRITICAL finding is a governance finding (UNSAFE_SINGLE_SIG_WITHDRAWAL)", () => {
+      const result = evaluateSecurityGate(
+        makeReport([], [
+          {
+            file: "treasury.rs",
+            line: 5,
+            rule: "UNSAFE_SINGLE_SIG_WITHDRAWAL",
+            severity: "CRITICAL",
+            description: "Withdrawal function lacks explicit multi-sig authorization check",
+          },
+        ])
+      );
+      expect(result.passed).toBe(false);
+      expect(result.blockingGovernanceFindings).toHaveLength(1);
+      expect(result.blockingGovernanceFindings[0].rule).toBe("UNSAFE_SINGLE_SIG_WITHDRAWAL");
+      expect(result.summary).toContain("Build blocked");
+    });
+
+    it("blocks when the only CRITICAL finding is a governance ADMIN_KEY_OVERRIDE", () => {
+      const result = evaluateSecurityGate(
+        makeReport([], [
+          {
+            file: "multisig.rs",
+            line: 12,
+            rule: "ADMIN_KEY_OVERRIDE",
+            severity: "CRITICAL",
+            description: "Admin key bypasses multi-sig",
+          },
+        ])
+      );
+      expect(result.passed).toBe(false);
+      expect(result.blockingGovernanceFindings).toHaveLength(1);
+    });
+
+    it("passes when governance findings are all below threshold (HIGH)", () => {
+      const result = evaluateSecurityGate(
+        makeReport([], [
+          {
+            file: "config.rs",
+            line: 3,
+            rule: "WEAK_THRESHOLD",
+            severity: "HIGH",
+          },
+        ])
+      );
+      expect(result.passed).toBe(true);
+      expect(result.blockingGovernanceFindings).toHaveLength(0);
+    });
+
+    it("blocks when both plain and governance findings have CRITICALs", () => {
+      const result = evaluateSecurityGate(
+        makeReport(
+          [{ file: "a.rs", line: 1, rule: "UNSAFE_BLOCK", severity: "CRITICAL" }],
+          [{ file: "b.rs", line: 2, rule: "UNSAFE_SINGLE_SIG_WITHDRAWAL", severity: "CRITICAL" }]
+        )
+      );
+      expect(result.passed).toBe(false);
+      expect(result.blockingFindings).toHaveLength(1);
+      expect(result.blockingGovernanceFindings).toHaveLength(1);
+    });
+
+    it("blocks on governance CRITICAL even when plain findings are empty", () => {
+      const result = evaluateSecurityGate(
+        makeReport([], [
+          { file: "vault.rs", line: 8, rule: "UNSAFE_SINGLE_SIG_WITHDRAWAL", severity: "CRITICAL" },
+        ])
+      );
+      expect(result.passed).toBe(false);
+      expect(result.blockingFindings).toHaveLength(0);
+      expect(result.blockingGovernanceFindings).toHaveLength(1);
+    });
+
+    it("treats absent governance_findings field as empty (backward-compatible)", () => {
+      // Reports produced before this change have no governance_findings key.
+      const result = evaluateSecurityGate({ target: "vero-core", findings: [] });
+      expect(result.passed).toBe(true);
+      expect(result.blockingGovernanceFindings).toHaveLength(0);
+    });
+
+    it("totalFindings counts plain + governance findings together", () => {
+      const result = evaluateSecurityGate(
+        makeReport(
+          [{ file: "a.rs", line: 1, rule: "UNSAFE_UNWRAP", severity: "HIGH" }],
+          [{ file: "b.rs", line: 2, rule: "WEAK_THRESHOLD", severity: "HIGH" }]
+        )
+      );
+      expect(result.totalFindings).toBe(2);
+    });
+
+    it("evaluateSecurityGateFromJson blocks on governance CRITICAL in JSON", () => {
+      const report = {
+        target: "vero-core",
+        findings: [],
+        governance_findings: [
+          {
+            file: "treasury.rs",
+            line: 5,
+            rule: "UNSAFE_SINGLE_SIG_WITHDRAWAL",
+            severity: "CRITICAL",
+            description: "Withdrawal function lacks explicit multi-sig authorization check",
+          },
+        ],
+      };
+      const result = evaluateSecurityGateFromJson(JSON.stringify(report));
+      expect(result.passed).toBe(false);
+      expect(result.blockingGovernanceFindings).toHaveLength(1);
     });
   });
 });

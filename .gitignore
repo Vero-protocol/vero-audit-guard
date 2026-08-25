@@ -8,3 +8,4 @@ target/
 .oncall-state.json
 logs/
 *-db.json
+test-results*.txt

@@ -238,4 +238,26 @@ describe("archive CLI entrypoint", () => {
     expect(result.stderr).toContain("ENOENT");
     expect(result.stdout).not.toContain("Archiving completed");
   });
+
+  it("can be executed via npm run archive-logs", () => {
+    const result = spawnSync(
+      "npm",
+      ["run", "archive-logs"],
+      {
+        cwd: PACKAGE_ROOT,
+        env: isolatedEnv({
+          ARCHIVE_LOGS_PATH: tempDir,
+          ARCHIVE_RETENTION_DAYS: "30",
+          ARCHIVE_S3_BUCKET: "audit-guard-test-bucket",
+          ARCHIVE_S3_PREFIX: "test-logs/",
+          ARCHIVE_S3_REGION: "us-east-1",
+        }),
+        encoding: "utf8",
+        shell: process.platform === "win32",
+      }
+    );
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("[Archive CLI] Archiving completed.");
+  });
 });
+
