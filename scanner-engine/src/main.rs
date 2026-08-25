@@ -8,7 +8,6 @@ use std::{
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
-use thiserror::Error;
 use walkdir::WalkDir;
 
 mod multisig_scanner;
@@ -30,30 +29,6 @@ struct ScanReport {
     findings: Vec<Finding>,
     governance_findings: Vec<GovernanceFinding>,
     report_hash: String,
-}
-
-/// Structured error type for all scanner-engine failure modes.
-/// Each variant maps to a distinct exit code and stderr format string.
-#[derive(Debug, Error)]
-pub enum ScannerError {
-    #[error("io error: {path}: {source}")]
-    IoError {
-        path: String,
-        #[source]
-        source: std::io::Error,
-    },
-    #[error("serialization failed: {0}")]
-    SerializationError(#[source] serde_json::Error),
-    #[error("report write failed: {path}: {source}")]
-    ReportWriteError {
-        path: String,
-        #[source]
-        source: std::io::Error,
-    },
-    #[error("invalid target: {path}: {reason}")]
-    InvalidTarget { path: String, reason: String },
-    #[error("report integrity check failed")]
-    IntegrityCheckFailed,
 }
 
 /// Static analysis rules applied to Soroban/Rust contract source files.
@@ -221,16 +196,7 @@ fn main() {
     let (file_count, all_findings) = scan_target(&target, &rules);
     let governance_findings = scan_governance_target(&target);
 
-    // Serialize findings — exit 2 on failure, nothing written to stdout
-    let report_json = match serde_json::to_string_pretty(&all_findings) {
-        Ok(json) => json,
-        Err(e) => {
-            eprintln!("[scanner] ERROR: serialization failed: {}", e);
-            std::process::exit(2);
-        }
-    };
-    let hash = sha256_of(&report_json);
-
+    // Build report shell; hash filled after successful serialization.
     let combined_report = ScanReport {
         target: target.clone(),
         total_files: file_count,
@@ -239,7 +205,14 @@ fn main() {
         report_hash: String::new(),
     };
 
-    let report_json = serde_json::to_string_pretty(&combined_report).unwrap();
+    // Serialize findings — exit 2 on failure, nothing written to stdout
+    let report_json = match serde_json::to_string_pretty(&combined_report) {
+        Ok(json) => json,
+        Err(e) => {
+            eprintln!("[scanner] ERROR: serialization failed: {}", e);
+            std::process::exit(2);
+        }
+    };
     let hash = sha256_of(&report_json);
 
     let report = ScanReport {
@@ -263,7 +236,13 @@ fn main() {
     }
     eprintln!("[scanner] ZK state validation hook passed — scan state transition verified.");
 
-    let out = serde_json::to_string_pretty(&report).unwrap();
+    let out = match serde_json::to_string_pretty(&report) {
+        Ok(json) => json,
+        Err(e) => {
+            eprintln!("[scanner] ERROR: serialization failed: {}", e);
+            std::process::exit(2);
+        }
+    };
     println!("{}", out);
 
     // Write report to /reports directory — exit 3 on failure
@@ -297,7 +276,10 @@ fn main() {
     }
     eprintln!("[scanner] Report written to {}", report_path.display());
     eprintln!("[scanner] Report SHA-256: {}", report.report_hash);
-    eprintln!("[scanner] Governance findings: {}", report.governance_findings.len());
+    eprintln!(
+        "[scanner] Governance findings: {}",
+        report.governance_findings.len()
+    );
 
     // CRITICAL findings check — exit 1
     if report.findings.iter().any(|f| f.severity == "CRITICAL") {
@@ -354,7 +336,9 @@ mod tests {
         let post = sha256_of("[]");
         let mut hook = ZkStateValidationHook::new();
 
-        assert!(verify_scan_state_transition(&mut hook, &pre, &post, &scan_nullifier(&post)).is_ok());
+        assert!(
+            verify_scan_state_transition(&mut hook, &pre, &post, &scan_nullifier(&post)).is_ok()
+        );
     }
 
     #[test]
@@ -400,4 +384,4 @@ mod tests {
             Err(ZkStateError::NoOpTransition)
         );
     }
-}
+                        }
