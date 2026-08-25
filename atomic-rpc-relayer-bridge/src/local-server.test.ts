@@ -50,6 +50,7 @@ describe("local-server", () => {
   beforeEach(() => {
     process.env = { ...originalEnv };
     delete process.env.DISABLE_ATOMIC_VERIFICATION;
+    delete process.env.AUTH_TOKEN;
     jest.clearAllMocks();
   });
 
@@ -124,11 +125,74 @@ describe("local-server", () => {
     }
   });
 
+  it("rejects Bearer undefined when AUTH_TOKEN is unset", async () => {
+    delete process.env.AUTH_TOKEN;
+    const server = startLocalServer({
+      port: 0,
+      host: "127.0.0.1",
+      // authToken intentionally omitted — fail closed
+    });
+
+    await new Promise<void>((resolve) => server.once("listening", () => resolve()));
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      server.close();
+      throw new Error("expected TCP address");
+    }
+
+    try {
+      // Literal "Bearer undefined" must not grant access
+      const withUndefined = await requestJson(address.port, "/metrics", "undefined");
+      expect(withUndefined.status).toBe(401);
+
+      const bare = await requestJson(address.port, "/metrics");
+      expect(bare.status).toBe(401);
+
+      const audit = await requestJson(address.port, "/audit-log", "undefined");
+      expect(audit.status).toBe(401);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("accepts correct token and rejects wrong token when AUTH_TOKEN is set", async () => {
+    const server = startLocalServer({
+      port: 0,
+      host: "127.0.0.1",
+      authToken: "secret-token",
+    });
+
+    await new Promise<void>((resolve) => server.once("listening", () => resolve()));
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      server.close();
+      throw new Error("expected TCP address");
+    }
+
+    try {
+      const ok = await requestJson(address.port, "/metrics", "secret-token");
+      expect(ok.status).toBe(200);
+
+      const bad = await requestJson(address.port, "/metrics", "wrong");
+      expect(bad.status).toBe(401);
+
+      const auditOk = await requestJson(address.port, "/audit-log", "secret-token");
+      expect(auditOk.status).toBe(200);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
   it("builds a metrics payload without starting a listener", () => {
     const { getMetrics } = createLocalBridgeHandler({
       relayerAddress: "GFIXTURE",
       initialNonce: 42,
       initialFailedTxCount: 1,
+      authToken: "fixture-token",
     });
     const [row] = getMetrics();
     expect(row.address).toBe("GFIXTURE");
@@ -147,6 +211,7 @@ describe("local-server", () => {
     }
     mockRpcResponse({ ledger: 123 });
     const { getBridge } = createLocalBridgeHandler({
+      authToken: "test-token",
       endpoints: [
         { url: "https://primary.example", priority: 10 },
         { url: "https://secondary.example", priority: 5 },
@@ -177,6 +242,7 @@ describe("local-server", () => {
     const warning = jest.spyOn(console, "warn").mockImplementation(() => undefined);
     mockRpcResponse({ ledger: 123 });
     const { getBridge } = createLocalBridgeHandler({
+      authToken: "test-token",
       endpoints: [
         { url: "https://primary.example", priority: 10 },
         { url: "https://secondary.example", priority: 5 },
@@ -203,7 +269,7 @@ describe("local-server", () => {
   it("rejects ambiguous atomic verification configuration", () => {
     process.env.DISABLE_ATOMIC_VERIFICATION = "yes";
 
-    expect(() => createLocalBridgeHandler()).toThrow(
+    expect(() => createLocalBridgeHandler({ authToken: "test-token" })).toThrow(
       'DISABLE_ATOMIC_VERIFICATION must be either "true" or "false"'
     );
   });
