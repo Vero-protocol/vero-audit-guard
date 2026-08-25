@@ -32,10 +32,26 @@ export interface ScannerFinding {
   snippet?: string;
 }
 
+/**
+ * Mirrors the GovernanceFinding struct emitted by multisig_scanner.rs.
+ * Governance findings carry the same severity levels as plain findings and
+ * must be evaluated by the security gate identically.
+ */
+export interface GovernanceFinding {
+  file: string;
+  line: number;
+  rule: string;
+  severity: string;
+  snippet?: string;
+  description?: string;
+}
+
 export interface ScannerReport {
   target: string;
   total_files?: number;
   findings: ScannerFinding[];
+  /** Governance/multisig findings emitted by scanner-engine's multisig_scanner module. */
+  governance_findings?: GovernanceFinding[];
   report_hash?: string;
 }
 
@@ -44,6 +60,7 @@ export interface SecurityGateResult {
   threshold: number;
   totalFindings: number;
   blockingFindings: ScannerFinding[];
+  blockingGovernanceFindings: GovernanceFinding[];
   summary: string;
   error?: string;
 }
@@ -71,9 +88,21 @@ export function evaluateSecurityGate(
   // Requirement: Integration with existing Audit-Guard API
   // Requirement: Adherence to Rust safety standards
   const findings = report.findings ?? [];
+  const governanceFindings = report.governance_findings ?? [];
+
   const blockingFindings = findings.filter((finding) =>
     isBlockingSeverity(finding.severity, threshold)
   );
+
+  // Governance findings carry the same severity model as plain findings and
+  // must be evaluated identically — a CRITICAL governance rule (e.g.
+  // UNSAFE_SINGLE_SIG_WITHDRAWAL) must block the build just as a CRITICAL
+  // static-analysis finding does.
+  const blockingGovernanceFindings = governanceFindings.filter((finding) =>
+    isBlockingSeverity(finding.severity, threshold)
+  );
+
+  const totalBlocking = blockingFindings.length + blockingGovernanceFindings.length;
 
   // Standardize security protocols and improve system resilience.
   // "N/A" was the sentinel the CI workflow wrote when it skipped the scan
@@ -85,31 +114,35 @@ export function evaluateSecurityGate(
     return {
       passed: false,
       threshold,
-      totalFindings: findings.length,
+      totalFindings: findings.length + governanceFindings.length,
       blockingFindings,
+      blockingGovernanceFindings,
       summary: `Build blocked — Target analysis missing for Rust safety standards integration.`,
     };
   }
 
-  if (blockingFindings.length > 0) {
+  if (totalBlocking > 0) {
     return {
       passed: false,
       threshold,
-      totalFindings: findings.length,
+      totalFindings: findings.length + governanceFindings.length,
       blockingFindings,
-      summary: `Build blocked — ${blockingFindings.length} finding(s) exceed severity threshold (${threshold}).`,
+      blockingGovernanceFindings,
+      summary: `Build blocked — ${totalBlocking} finding(s) exceed severity threshold (${threshold}).`,
     };
   }
 
+  const totalFindings = findings.length + governanceFindings.length;
   return {
     passed: true,
     threshold,
-    totalFindings: findings.length,
+    totalFindings,
     blockingFindings: [],
+    blockingGovernanceFindings: [],
     summary:
-      findings.length === 0
+      totalFindings === 0
         ? "Security gate passed — no findings. Rust safety standards adhered."
-        : `Security gate passed — ${findings.length} finding(s) within threshold. Rust safety standards adhered.`,
+        : `Security gate passed — ${totalFindings} finding(s) within threshold. Rust safety standards adhered.`,
   };
 }
 
@@ -126,6 +159,7 @@ export function evaluateSecurityGateFromJson(
       threshold,
       totalFindings: 0,
       blockingFindings: [],
+      blockingGovernanceFindings: [],
       summary: "Build blocked — scan report is not valid JSON.",
       error: "INVALID_JSON",
     };
@@ -137,6 +171,7 @@ export function evaluateSecurityGateFromJson(
       threshold,
       totalFindings: 0,
       blockingFindings: [],
+      blockingGovernanceFindings: [],
       summary: "Build blocked — scan report is missing a findings array.",
       error: "INVALID_REPORT",
     };
