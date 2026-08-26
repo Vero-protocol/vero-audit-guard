@@ -233,7 +233,9 @@ describe("security-gate CLI entrypoint", () => {
     const result = runCli([reportPath]);
 
     expect(result.status).toBe(1);
-    expect(result.stdout).toContain("Target analysis missing");
+    expect(result.stdout).toContain(
+      "target is missing, empty, or marked as not analyzed"
+    );
     expect(result.stdout).toContain('"passed": false');
   });
 });
