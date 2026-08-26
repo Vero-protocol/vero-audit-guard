@@ -30,7 +30,7 @@ impl DriftEvent {
 }
 
 // Use chrono for timestamp parsing – it is already a dependency in the workspace.
-use chrono::{DateTime, FixedOffset};
+use chrono::DateTime;
 
 /// Configurable threshold for drift validation.
 /// In a real implementation this would be loaded from a policy file (e.g., OPA),
@@ -52,3 +52,10 @@ pub fn validate_drift(event: &DriftEvent) -> Result<(), DriftError> {
     // For now we assume the static threshold is sufficient.
     Ok(())
 }
+
+// Wire the previously-unreferenced drift validator tests into the crate so that
+// `cargo test` actually compiles and runs them. They live in
+// `drift_validator_test.rs` and use `super::*` (this module's scope already
+// brings `DriftEvent`, `validate_drift`, and `DriftError` into view).
+#[cfg(test)]
+mod drift_validator_test;
