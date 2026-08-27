@@ -233,8 +233,28 @@ No modificar el README en esta fase si el entregable se limita al SSOT; los camb
 - No existe `rust-toolchain.toml`; la auditoria valida herramientas disponibles, no una version inventada.
 - Las versiones exactas de dependencias permanecen gobernadas por manifiestos y lockfiles existentes.
 
+## Validaciones QA de la fase documental
+
+Fecha de auditoria: 2026-08-26.
+
+| Area | Comando o comprobacion | Resultado | Observaciones |
+| --- | --- | --- | --- |
+| Enlaces y anclas | Parser Node sobre enlaces Markdown locales de `ARCHITECTURE.md` y `README.md` | PASS | Todos los destinos locales existen y las anclas enlazadas a `ARCHITECTURE.md` resuelven. |
+| Mermaid | Conteo y cierre de fences `mermaid` en `ARCHITECTURE.md` | PASS | 2 bloques encontrados y cerrados: `flowchart` y `C4Container`. |
+| Formato | `git diff --check` | PASS | Sin errores de whitespace. |
+| Scanner Rust | `cd scanner-engine && cargo test --locked` | PASS | 30 passed, 0 failed. |
+| Audit-guard Rust | `cd src/audit-guard && cargo test --locked` | FAIL preexistente | 93 passed, 1 failed: `hot_reload::tests::test_watch_event_propagation`; no se modifico codigo. |
+| Anomaly detector | `cd anomaly-detector && npm test -- --runInBand` | BLOCKED | `jest: command not found`; dependencias Node locales no instaladas. |
+| RPC bridge | `cd atomic-rpc-relayer-bridge && npm test -- --runInBand` | BLOCKED | `jest: command not found`; dependencias Node locales no instaladas. |
+| Verifiable audit trail | `cd verifiable-audit-trail && npm test -- --runInBand` | BLOCKED | `jest: command not found`; dependencias Node locales no instaladas. |
+| Audit-guard TypeScript | `cd src/audit-guard && npm test -- --runInBand` | BLOCKED | `jest: command not found`; dependencias Node locales no instaladas. |
+
+### Veredicto QA
+
+La integridad documental de `ARCHITECTURE.md`, `README.md` y este SSOT queda **APROBADA**: los enlaces locales, anclas, bloques Mermaid y contratos documentados pasan las comprobaciones estáticas. La ausencia de `node_modules` impide certificar las suites Jest y la suite Rust de `src/audit-guard` conserva un fallo en `hot_reload`; ambos puntos quedan reportados como riesgo de validacion de codigo y fuera del alcance permitido para este issue. No se alteraron contratos ni logica de negocio.
+
 ## Commit de la fase
 
 ```bash
-git add docs/context/issue-243-context.md && git commit -m "docs(arch): definir ADRs y contratos para issue-243"
+git add docs/context/issue-243-context.md && git commit -m "test(qa): validar integridad de ARCHITECTURE.md, enlaces y contratos"
 ```
