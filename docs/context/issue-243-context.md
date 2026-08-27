@@ -5,7 +5,8 @@
 - Repositorio: `Vero-protocol/vero-audit-guard`
 - Rama de trabajo: `docs/issue-243-add-architecture-doc`
 - Rama base: `main`
-- Fase: especificacion para implementar `ARCHITECTURE.md` y actualizar `README.md`.
+- Fase: implementacion documental completada; `ARCHITECTURE.md` creado y `README.md` actualizado.
+- Entregables de la fase: arquitectura raiz, enlaces de navegacion, contratos y diagramas Mermaid.
 - Restriccion: documentacion y scaffolding solamente; no modificar codigo de negocio ni introducir dependencias.
 - Fuente de verdad: este archivo conserva las decisiones y contratos identificados durante el issue.
 
