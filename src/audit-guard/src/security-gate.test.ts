@@ -156,24 +156,31 @@ describe("security-gate", () => {
     });
   });
 
-  describe("skipped-scan sentinels", () => {
-    // The CI workflow used to write {"target":"N/A", ...} whenever the scan
-    // target was missing — which was always, since nothing checked the
-    // contracts out. "N/A" is truthy, so it satisfied the compliance check and
-    // every PR received a passing security verdict from a scan that never ran.
+  describe("target validation", () => {
     it("blocks a report whose target is the N/A sentinel", () => {
-      const result = evaluateSecurityGate({ target: "N/A", findings: [] });
+      const result = evaluateSecurityGateFromJson(
+        JSON.stringify({ target: "N/A", findings: [] })
+      );
       expect(result.passed).toBe(false);
-      expect(result.summary).toContain("Target analysis missing");
+      expect(result.summary).toContain("target is missing, empty, or marked as not analyzed");
     });
 
-    it("blocks a report with an empty or whitespace target", () => {
-      expect(evaluateSecurityGate({ target: "", findings: [] }).passed).toBe(false);
-      expect(evaluateSecurityGate({ target: "   ", findings: [] }).passed).toBe(false);
+    it("blocks a report with a missing, empty, or whitespace target", () => {
+      for (const target of [undefined, "", "   "]) {
+        const result = evaluateSecurityGateFromJson(
+          JSON.stringify({ target, findings: [] })
+        );
+        expect(result.passed).toBe(false);
+        expect(result.error).toBe("INVALID_REPORT");
+        expect(result.summary).toContain("target is missing, empty, or marked as not analyzed");
+      }
     });
 
     it("still passes a real target with no findings", () => {
-      expect(evaluateSecurityGate(makeReport([])).passed).toBe(true);
+      const result = evaluateSecurityGateFromJson(JSON.stringify(makeReport([])));
+      expect(result.passed).toBe(true);
+      expect(result.summary).toBe("Security gate passed — no findings.");
+      expect(result.summary).not.toContain("Rust safety");
     });
   });
 
