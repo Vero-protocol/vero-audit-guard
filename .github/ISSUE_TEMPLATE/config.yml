@@ -1,0 +1,14 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 📖 Documentation
+    url: https://docs.veroprotocol.io/audit-guard
+    about: Check the documentation for guides and reference
+  - name: 🔒 Security Disclosure
+    url: https://github.com/Vero-protocol/vero-audit-guard/security
+    about: Please report security vulnerabilities here
+  - name: 💬 Discord Community
+    url: https://discord.gg/veroprotocol
+    about: Join our community for discussions and support
+  - name: ✨ Feature Discussion
+    url: https://github.com/Vero-protocol/vero-audit-guard/discussions
+    about: Discuss feature ideas before opening an issue
