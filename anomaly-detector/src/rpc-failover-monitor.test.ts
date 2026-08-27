@@ -92,6 +92,48 @@ describe("RpcFailoverMonitor", () => {
     expect(smallMonitor.getSuccessRate(URL_A)).toBe(1);
   });
 
+  it("caps failover events and records dropped count", () => {
+    const cappedMonitor = new RpcFailoverMonitor(10, 500);
+
+    for (let i = 0; i < 10000; i++) {
+      cappedMonitor.recordFailover(`${URL_A}/${i}`, URL_B);
+    }
+
+    const report = cappedMonitor.buildReport(false);
+    expect(report.events).toHaveLength(500);
+    expect(report.droppedEvents).toBe(9500);
+    expect(report.events[0].fromUrl).toBe(`${URL_A}/9500`);
+  });
+
+  it("falls back to default health window for invalid RPC_HEALTH_WINDOW", () => {
+    const originalWindow = process.env.RPC_HEALTH_WINDOW;
+    process.env.RPC_HEALTH_WINDOW = "abc";
+
+    try {
+      jest.isolateModules(() => {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const { RpcFailoverMonitor: IsolatedMonitor } = require("./rpc-failover-monitor");
+        const envMonitor = new IsolatedMonitor();
+
+        for (let i = 0; i < 150; i++) {
+          envMonitor.recordCheck(URL_A, i >= 50);
+        }
+
+        const report = envMonitor.buildReport(false);
+        const epA = report.endpoints.find((e: { url: string }) => e.url === URL_A);
+        expect(epA).toBeDefined();
+        expect(epA.checksRecorded).toBe(100);
+        expect(envMonitor.getSuccessRate(URL_A)).toBe(1);
+      });
+    } finally {
+      if (originalWindow === undefined) {
+        delete process.env.RPC_HEALTH_WINDOW;
+      } else {
+        process.env.RPC_HEALTH_WINDOW = originalWindow;
+      }
+    }
+  });
+
   it("reset() clears all state", () => {
     monitor.recordCheck(URL_A, false);
     monitor.recordCheck(URL_B, true);
@@ -104,6 +146,7 @@ describe("RpcFailoverMonitor", () => {
     const report = monitor.buildReport(false);
     expect(report.endpoints).toHaveLength(0);
     expect(report.events).toHaveLength(0);
+    expect(report.droppedEvents).toBe(0);
     expect(report.degradedEndpoints).toHaveLength(0);
   });
 });
