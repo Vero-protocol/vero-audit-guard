@@ -2,7 +2,8 @@
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::drift_validator::{DriftEvent, validate_drift};
+    use crate::drift_error::DriftError;
     use chrono::Utc;
 
     fn make_event(drift: u64, id: &str) -> DriftEvent {

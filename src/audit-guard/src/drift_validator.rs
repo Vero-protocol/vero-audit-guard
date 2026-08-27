@@ -30,7 +30,7 @@ impl DriftEvent {
 }
 
 // Use chrono for timestamp parsing – it is already a dependency in the workspace.
-use chrono::{DateTime, FixedOffset};
+use chrono::DateTime;
 
 /// Configurable threshold for drift validation.
 /// In a real implementation this would be loaded from a policy file (e.g., OPA),

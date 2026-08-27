@@ -754,6 +754,9 @@ impl ScheduledTreasuryOutflow {
 }
 
 #[cfg(test)]
+mod drift_validator_test;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use wiremock::{
