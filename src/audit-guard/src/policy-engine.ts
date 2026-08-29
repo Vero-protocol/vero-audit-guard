@@ -303,19 +303,17 @@ export class PolicyEngine {
     return result;
   }
 
-  /**
+ /**
    * Second, independent control against a compromised CI runner tampering with
-   * the Rego policy bundle (Issue #171 / VAG-003). When bundle signing is
-   * configured (POLICY_BUNDLE_SIGNATURE + POLICY_BUNDLE_SIGNERS), verify the
-   * on-disk bundle against a manifest signed offline by a trusted maintainer
-   * key. Observational-only: failures are surfaced as high/critical WARNINGS
-   * (which reportToDashboard() forwards as alerts) — they never silently drop,
-   * but this control holds no on-chain halt authority.
+   * the Rego policy bundle (Issue #171 / VAG-003). 
+   * 
+   * UPDATED (Issue #311): Confirmed tampering now promotes status to 
+   * NON_COMPLIANT to block the build.
    */
   private applyPolicyBundleVerification(result: EvaluationResult): void {
     const verifier = new PolicyBundleVerifier({ policiesDir: this.policiesDir });
     if (!verifier.isConfigured()) {
-      return; // Enforcement not enabled for this repo/environment.
+      return; 
     }
 
     const verification = verifier.verify();
@@ -323,25 +321,46 @@ export class PolicyEngine {
       return;
     }
 
+    let hasTampering = false;
+
     for (const err of verification.errors) {
-      const critical =
+      const isTampered =
         err.code === PolicyBundleErrorCode.BundleTampered ||
         err.code === PolicyBundleErrorCode.SignatureInvalid ||
         err.code === PolicyBundleErrorCode.UntrustedSigner;
-      result.warnings.push({
-        rule: err.code,
-        severity: critical ? "CRITICAL" : "HIGH",
-        message: `⚠️  Policy bundle signature verification failed: ${err.message}`,
-        detail: err.detail || err.message,
-      });
+
+      if (isTampered) {
+        hasTampering = true;
+        // Promote to violations to block build
+        result.violations.push({
+          rule: err.code,
+          severity: "CRITICAL",
+          message: `❌ CRITICAL: Policy bundle integrity check failed: ${err.message}`,
+          detail: err.detail || err.message,
+        });
+      } else {
+        // Keep non-critical verification issues as warnings
+        result.warnings.push({
+          rule: err.code,
+          severity: "HIGH",
+          message: `⚠️  Policy bundle signature verification warning: ${err.message}`,
+          detail: err.detail || err.message,
+        });
+      }
     }
 
+    // Update counts
+    result.violations_count = result.violations.length;
     result.warnings_count = result.warnings.length;
-    if (result.status === "COMPLIANT") {
+
+    // Determine final status
+    if (hasTampering) {
+      result.status = "NON_COMPLIANT";
+      result.summary = "❌ Policy bundle tampering detected — blocking build";
+    } else if (result.warnings.length > 0 && result.status === "COMPLIANT") {
       result.status = "WARNING";
     }
   }
-
   /**
    * Evaluate using OPA CLI
    */

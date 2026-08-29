@@ -1,0 +1,32 @@
+name: Performance Regression Detection
+
+on:
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  performance-test:
+    runs-on: ubuntu-latest
+    services:
+      # If you need DBs (Postgres/Redis), define them here
+      postgres:
+        image: postgres:15
+        ports: ['5432:5432']
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Environment
+        # Add steps to build your backend (npm install, go build, etc.)
+        run: |
+          npm install
+          npm run build
+          npm run start & 
+          sleep 10 # Wait for boot
+
+      - name: Run k6 Performance Test
+        uses: grafana/k6-action@v0.3.0
+        with:
+          filename: tests/performance/critical-paths.js
+          flags: --env API_URL=http://localhost:3000
