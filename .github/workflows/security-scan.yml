@@ -39,9 +39,30 @@ jobs:
       - name: Install cargo-audit
         uses: taiki-e/install-action@cargo-audit
 
-      - name: Audit Rust dependencies for known vulnerabilities
-        run: cargo audit --deny warnings
+      # Vulnerabilities, unsound code, and unmaintained crates fail the build.
+      # A *yanked* crate deliberately does not: a yank is a publisher action
+      # that can land at any moment with no change on our side, and
+      # `--deny warnings` turned that into a hard failure. chacha20 0.10.1 was
+      # yanked on 2026-08-27 and left main red for two days with no commit.
+      # Yanks are still surfaced below, as a warning rather than a stop.
+      - name: Audit scanner-engine dependencies
+        run: cargo audit --deny unsound --deny unmaintained
         working-directory: scanner-engine
+
+      # src/audit-guard has its own Cargo.lock and is built and tested by this
+      # workflow, but was never audited.
+      - name: Audit audit-guard dependencies
+        run: cargo audit --deny unsound --deny unmaintained
+        working-directory: src/audit-guard
+
+      - name: Report yanked crates (non-blocking)
+        continue-on-error: true
+        run: |
+          for d in scanner-engine src/audit-guard; do
+            if ! ( cd "$d" && cargo audit --deny yanked ); then
+              echo "::warning file=$d/Cargo.lock::Yanked crate present in $d — run 'cargo update' to move off it."
+            fi
+          done
 
       - name: Run scanner-engine regression tests
         run: cargo test --locked
