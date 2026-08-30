@@ -71,6 +71,7 @@ vero-audit-guard/
 │   └── src/main.rs
 ├── anomaly-detector/        # TypeScript relayer monitor
 │   ├── Dockerfile
+│   ├── README.md
 │   └── src/index.ts
 ├── atomic-rpc-relayer-bridge/  # Local RPC/metrics bridge
 │   ├── Dockerfile
