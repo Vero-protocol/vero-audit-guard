@@ -85,6 +85,7 @@ vero-audit-guard/
 │   ├── security-scan.yml    # PR-gated CI pipeline
 │   └── policy-compliance.yml # OPA policy compliance checks
 ├── BUILD_GUARD.sh           # Local automation script
+├── CODE_OF_CONDUCT.md       # Contributor code of conduct
 ├── CONTRIBUTING.md          # Contributor + compose workflow
 ├── POLICY_AS_CODE.md        # Policy engine documentation
 ├── INCIDENT_RESPONSE.md     # Emergency runbook
@@ -182,6 +183,12 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the compose workflow, environment v
 | `HORIZON_URL`            | audit-trail          | Horizon server URL                             |
 | `POLICY_BUNDLE_SIGNATURE`| audit-guard          | Detached hex signature over the signed policy-bundle manifest |
 | `POLICY_BUNDLE_SIGNERS`  | audit-guard          | Comma-separated trusted policy-bundle signer public keys |
+
+---
+
+## Code of Conduct
+
+Please note that this project is released with a Contributor Code of Conduct. By participating in this project you agree to abide by its terms. See [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) for details.
 
 ---
 
