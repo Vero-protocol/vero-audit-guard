@@ -4,6 +4,7 @@
  * Exposes relayer metrics that anomaly-detector can poll, plus a health
  * endpoint so compose can wait until the bridge is ready.
  */
+import * as crypto from "crypto";
 import * as http from "http";
 import type { IncomingMessage, ServerResponse } from "http";
 import AtomicRpcRelayerBridge, { type BridgeEndpoint } from "./index";
@@ -15,6 +16,8 @@ export interface LocalServerOptions {
   initialNonce?: number;
   initialFailedTxCount?: number;
   endpoints?: BridgeEndpoint[];
+  authToken?: string;
+  disableAtomicVerification?: boolean;
 }
 
 export interface RelayerMetricsPayload {
@@ -30,6 +33,16 @@ function parsePositiveInt(value: string | undefined, fallback: number): number {
   return parsed;
 }
 
+function parseBooleanFlag(value: string | undefined, name: string): boolean {
+  if (value === undefined) return false;
+
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "true") return true;
+  if (normalized === "false") return false;
+
+  throw new Error(`${name} must be either "true" or "false"`);
+}
+
 function defaultEndpoints(): BridgeEndpoint[] {
   const raw = process.env.BRIDGE_ENDPOINTS ?? "http://127.0.0.1:8545";
   return raw
@@ -39,19 +52,69 @@ function defaultEndpoints(): BridgeEndpoint[] {
     .map((url, index) => ({ url, priority: 10 - index }));
 }
 
+/** Normalize configured auth token; empty / whitespace → unset. */
+function resolveAuthToken(optionsToken?: string): string | undefined {
+  const raw = optionsToken ?? process.env.AUTH_TOKEN;
+  if (raw === undefined) return undefined;
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+/**
+ * Constant-time Bearer comparison.
+ * Returns false if expected token is unset (fail closed).
+ */
+function isAuthorizedBearer(
+  authHeader: string | undefined,
+  expectedToken: string | undefined,
+): boolean {
+  if (!expectedToken) return false;
+  if (!authHeader || !authHeader.startsWith("Bearer ")) return false;
+
+  const provided = authHeader.slice("Bearer ".length);
+  const expectedBuf = Buffer.from(expectedToken, "utf8");
+  const providedBuf = Buffer.from(provided, "utf8");
+
+  if (expectedBuf.length !== providedBuf.length) {
+    // Still run a compare against equal-length dummy to reduce timing signal.
+    crypto.timingSafeEqual(expectedBuf, expectedBuf);
+    return false;
+  }
+
+  return crypto.timingSafeEqual(expectedBuf, providedBuf);
+}
+
 export function createLocalBridgeHandler(options: LocalServerOptions = {}): {
   handleRequest: (req: IncomingMessage, res: ServerResponse) => void;
   getMetrics: () => RelayerMetricsPayload[];
   getBridge: () => AtomicRpcRelayerBridge;
 } {
-  const relayerAddress = options.relayerAddress ?? process.env.RELAYER_ADDRESS ?? "GLOCALDEVRELAYER";
+  const relayerAddress =
+    options.relayerAddress ?? process.env.RELAYER_ADDRESS ?? "GLOCALDEVRELAYER";
   let nonce = options.initialNonce ?? parsePositiveInt(process.env.INITIAL_NONCE, 100);
   const failedTxCount =
     options.initialFailedTxCount ?? parsePositiveInt(process.env.INITIAL_FAILED_TX_COUNT, 0);
+  const authToken = resolveAuthToken(options.authToken);
+  const disableAtomicVerification =
+    options.disableAtomicVerification ??
+    parseBooleanFlag(process.env.DISABLE_ATOMIC_VERIFICATION, "DISABLE_ATOMIC_VERIFICATION");
+
+  if (!authToken) {
+    console.warn(
+      "[atomic-rpc-relayer-bridge] AUTH_TOKEN is unset — /metrics and /audit-log will return 401",
+    );
+  }
+
+  if (disableAtomicVerification) {
+    console.warn(
+      "[atomic-rpc-relayer-bridge] WARNING: atomic verification is disabled; " +
+        "responses from a single RPC endpoint will be trusted without a secondary cross-check",
+    );
+  }
 
   const bridge = new AtomicRpcRelayerBridge({
     endpoints: options.endpoints ?? defaultEndpoints(),
-    requireAtomicVerification: false,
+    requireAtomicVerification: !disableAtomicVerification,
   });
 
   const json = (res: ServerResponse, status: number, body: unknown): void => {
@@ -77,8 +140,15 @@ export function createLocalBridgeHandler(options: LocalServerOptions = {}): {
       return;
     }
 
+    if (method === "GET" && (url === "/metrics" || url === "/audit-log")) {
+      // Fail closed when AUTH_TOKEN is unset — never accept "Bearer undefined".
+      if (!isAuthorizedBearer(req.headers.authorization, authToken)) {
+        json(res, 401, { error: "unauthorized" });
+        return;
+      }
+    }
+
     if (method === "GET" && url === "/metrics") {
-      nonce += 1;
       json(res, 200, getMetrics());
       return;
     }
@@ -103,7 +173,7 @@ export function startLocalServer(options: LocalServerOptions = {}): http.Server 
   server.listen(port, host, () => {
     const addr = server.address();
     const bound =
-      typeof addr === "object" && addr !== null ? `${addr.address}:${addr.port}` : `${host}:${port}`;
+      typeof addr === "object" && addr !== null ? `\( {addr.address}: \){addr.port}` : `\( {host}: \){port}`;
     console.log(`[atomic-rpc-relayer-bridge] local server listening on ${bound}`);
     console.log("[atomic-rpc-relayer-bridge] GET /health  GET /metrics  GET /audit-log");
   });

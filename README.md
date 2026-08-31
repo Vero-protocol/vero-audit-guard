@@ -6,6 +6,8 @@
 
 > **The Watchtower for the Vero Protocol.** Automated security monitoring, formal static analysis, and an immutable on-chain audit trail — all in one place.
 
+**Architecture:** [Read the root architecture](ARCHITECTURE.md) for component boundaries, data contracts, security invariants, Mermaid diagrams, and end-to-end flows.
+
 ---
 
 ## Security-First Stance
@@ -29,8 +31,11 @@
 │  vero-core-contracts ──── scanner-engine ─────────┐            │
 │       (Soroban/Rust)       (Rust binary)           │            │
 │                                                    ▼            │
-│  vero-relayer-service ── anomaly-detector ── /reports/ ──┐      │
-│       (Node.js)            (TypeScript)      (JSON)      │      │
+│  vero-relayer-service ── atomic-rpc-relayer-bridge ──────┐      │
+│       (Node.js)             (TypeScript)                  │      │
+│                                  │ metrics                │      │
+│                                  ▼                        │      │
+│                          anomaly-detector                 │      │
 │                                                          ▼      │
 │                         GitHub PRs ──── audit-guard ──────┐    │
 │                         (Pull Requests) (OPA/Rego)       │      │
@@ -48,11 +53,11 @@
 
 | Component                  | Language  | Role                                              |
 |----------------------------|-----------|---------------------------------------------------|
-| `scanner-engine`           | Rust      | Static analysis of Soroban contracts              |
-| `anomaly-detector`         | TypeScript| Real-time relayer monitoring                      |
-| `atomic-rpc-relayer-bridge`| TypeScript| Local RPC/metrics bridge for the relayer pipeline |
-| `audit-guard`              | TypeScript| Policy as Code enforcement on GitHub PRs           |
-| `verifiable-audit-trail`   | TypeScript| On-chain report hash anchoring (Stellar)          |
+| [`scanner-engine`](ARCHITECTURE.md#scanner-engine) | Rust | Static and governance analysis of Soroban contracts |
+| [`anomaly-detector`](ARCHITECTURE.md#anomaly-detector) | TypeScript | Observational relayer monitoring and alerts |
+| [`atomic-rpc-relayer-bridge`](ARCHITECTURE.md#atomic-rpc-relayer-bridge) | TypeScript | Atomic RPC relaying with integrity verification |
+| [`src/audit-guard`](ARCHITECTURE.md#srcaudit-guard) | Rust + TypeScript | OPA policy evaluation and security analyzers |
+| [`verifiable-audit-trail`](ARCHITECTURE.md#verifiable-audit-trail) | TypeScript | Report hash verification and Stellar anchoring |
 | `BUILD_GUARD.sh`           | Bash      | Local and CI orchestrator                         |
 | `.github/workflows/`       | YAML      | PR-gated security pipeline                        |
 
@@ -82,15 +87,20 @@ vero-audit-guard/
 ├── docker/sample-target/    # Clean fixture scanned by compose
 ├── reports/                 # Generated scan reports (gitignored content)
 ├── docker-compose.yml       # Local multi-service pipeline
+├── ARCHITECTURE.md          # Root architecture, contracts, and invariants
 ├── .github/workflows/
 │   ├── security-scan.yml    # PR-gated CI pipeline
-│   └── policy-compliance.yml # OPA policy compliance checks
+│   ├── policy-compliance.yml # OPA policy compliance checks
+│   └── anchor-on-merge.yml  # Anchors audit trail on merge to main
 ├── BUILD_GUARD.sh           # Local automation script
 ├── CODE_OF_CONDUCT.md       # Contributor code of conduct
 ├── CONTRIBUTING.md          # Contributor + compose workflow
 ├── POLICY_AS_CODE.md        # Policy engine documentation
 ├── INCIDENT_RESPONSE.md     # Emergency runbook
-└── VULNERABILITY_DISCLOSURE.md  # Bug bounty & reporting
+├── VULNERABILITY_DISCLOSURE.md  # Bug bounty & reporting
+├── SECURITY.md              # Security policy & reporting
+├── CHANGELOG.md             # Release history
+└── TODO.md                  # Pending work tracker
 ```
 
 ---
@@ -111,6 +121,8 @@ See [`INCIDENT_RESPONSE.md`](INCIDENT_RESPONSE.md) for the full runbook.
 ---
 
 ## Getting Started
+
+Read [ARCHITECTURE.md](ARCHITECTURE.md) for system boundaries, data contracts, integration flows, failure behavior, and security invariants before changing cross-package behavior.
 
 ### Prerequisites
 - Rust toolchain (`rustup install stable`)
@@ -151,7 +163,7 @@ What comes up:
 |---------|-----------------|----------|
 | `scanner-engine` | Static-analysis against `./docker/sample-target` (override with `SCAN_HOST_TARGET`) | One-shot; writes `reports/latest-scan.json` |
 | `verifiable-audit-trail` | SHA-256 of reports; Stellar anchor when `AUDIT_KEYPAIR_SECRET` is set | One-shot after the scanner succeeds |
-| `atomic-rpc-relayer-bridge` | Local HTTP metrics server (`GET /metrics`, `GET /health`) | Long-running on port `8545` |
+| `atomic-rpc-relayer-bridge` | Local HTTP metrics server (`GET /metrics`, `GET /health`, `GET /audit-log`) | Long-running on port `8545`; protected endpoints require `AUTH_TOKEN` |
 | `anomaly-detector` | Polls the bridge metrics URL and emits anomaly alerts | Long-running |
 
 Useful commands:
@@ -169,6 +181,8 @@ docker compose down
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the compose workflow, environment variables, and service ports.
 
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the container topology and integration contracts.
+
 ### Environment Variables
 
 | Variable                 | Component            | Description                                    |
@@ -176,6 +190,7 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the compose workflow, environment v
 | `AUDIT_KEYPAIR_SECRET`   | audit-trail          | Stellar secret key for on-chain anchoring      |
 | `SCAN_HOST_TARGET`       | scanner-engine       | Host path mounted as the scan target (compose)     |
 | `BRIDGE_PORT`            | rpc-relayer-bridge   | Host port for the local metrics server (default 8545) |
+| `DISABLE_ATOMIC_VERIFICATION` | rpc-relayer-bridge | Set to `true` to disable atomic verification (trades security/trust for latency/availability). |
 | `RELAYER_METRICS_URL`    | anomaly-detector     | HTTP endpoint exposing relayer metrics JSON    |
 | `AUTHORIZED_ADDRESSES`   | anomaly-detector     | Comma-separated list of allowed relayer addresses |
 | `NONCE_SPIKE_THRESHOLD`  | anomaly-detector     | Nonce delta threshold (default: 50)            |
@@ -184,6 +199,10 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the compose workflow, environment v
 | `HORIZON_URL`            | audit-trail          | Horizon server URL                             |
 | `POLICY_BUNDLE_SIGNATURE`| audit-guard          | Detached hex signature over the signed policy-bundle manifest |
 | `POLICY_BUNDLE_SIGNERS`  | audit-guard          | Comma-separated trusted policy-bundle signer public keys |
+
+> **Note on Atomic Verification (`DISABLE_ATOMIC_VERIFICATION`)**:
+> By default, the `atomic-rpc-relayer-bridge` requires majority verification for replay-safe requests. `POST`, `PUT`, and `DELETE` are submitted once and are not cross-verified unless the caller explicitly declares idempotency or provides an idempotency key. Setting this flag to `true` disables cross-endpoint verification, which trades response integrity for lower latency and higher availability.
+> The only accepted values are `true` and `false`; invalid values stop server initialization instead of silently changing the verification policy.
 
 ---
 

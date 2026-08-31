@@ -39,9 +39,30 @@ jobs:
       - name: Install cargo-audit
         uses: taiki-e/install-action@cargo-audit
 
-      - name: Audit Rust dependencies for known vulnerabilities
-        run: cargo audit --deny warnings
+      # Vulnerabilities, unsound code, and unmaintained crates fail the build.
+      # A *yanked* crate deliberately does not: a yank is a publisher action
+      # that can land at any moment with no change on our side, and
+      # `--deny warnings` turned that into a hard failure. chacha20 0.10.1 was
+      # yanked on 2026-08-27 and left main red for two days with no commit.
+      # Yanks are still surfaced below, as a warning rather than a stop.
+      - name: Audit scanner-engine dependencies
+        run: cargo audit --deny unsound --deny unmaintained
         working-directory: scanner-engine
+
+      # src/audit-guard has its own Cargo.lock and is built and tested by this
+      # workflow, but was never audited.
+      - name: Audit audit-guard dependencies
+        run: cargo audit --deny unsound --deny unmaintained
+        working-directory: src/audit-guard
+
+      - name: Report yanked crates (non-blocking)
+        continue-on-error: true
+        run: |
+          for d in scanner-engine src/audit-guard; do
+            if ! ( cd "$d" && cargo audit --deny yanked ); then
+              echo "::warning file=$d/Cargo.lock::Yanked crate present in $d — run 'cargo update' to move off it."
+            fi
+          done
 
       - name: Run scanner-engine regression tests
         run: cargo test --locked
@@ -63,15 +84,38 @@ jobs:
         run: cargo test
         working-directory: scanner-engine
 
+      # The whole point of this job is scanning the contracts, so they have to
+      # be fetched. Without this the scan step's fail-closed guard fires and
+      # the job stops — which is correct behaviour, but not useful.
+      - name: Check out the contracts to scan
+        uses: actions/checkout@v4
+        with:
+          repository: Vero-protocol/vero-core-contracts
+          path: scan-target/vero-core-contracts
+
       - name: Run static analysis
         run: |
           mkdir -p ../reports
-          if [ -d "vero-core-contracts" ]; then
-            ./target/release/scanner ../vero-core-contracts | tee ../reports/latest-scan.json
-          else
-            echo '{"target":"N/A","total_files":0,"findings":[],"report_hash":"N/A"}' \
-              > ../reports/latest-scan.json
+          TARGET="../scan-target/vero-core-contracts"
+          # Fail loudly. Previously a missing target wrote a hardcoded empty
+          # report, which the security gate then passed — so every PR received a
+          # green verdict from a scan that never ran.
+          if [ ! -d "$TARGET" ]; then
+            echo "::error::Scan target $TARGET is missing. Refusing to emit an empty report."
+            exit 1
           fi
+          ./target/release/scanner "$TARGET" | tee ../reports/latest-scan.json
+          # The scanner exits non-zero on CRITICAL findings, but `tee` masks
+          # that, so check the pipe status explicitly.
+          if [ "${PIPESTATUS[0]}" -ne 0 ]; then
+            echo "::error::Scanner reported CRITICAL findings."
+            exit 1
+          fi
+          if ! grep -q '"total_files"' ../reports/latest-scan.json; then
+            echo "::error::Scanner produced no usable report."
+            exit 1
+          fi
+        shell: bash
         working-directory: scanner-engine
 
       - name: Upload scan report
@@ -120,10 +164,30 @@ jobs:
         run: npm run build
         working-directory: verifiable-audit-trail
 
+  atomic-rpc-relayer-bridge:
+    name: RPC Relayer Bridge Tests (TypeScript)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: atomic-rpc-relayer-bridge/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: atomic-rpc-relayer-bridge
+
+      - name: Run tests
+        run: npm test
+        working-directory: atomic-rpc-relayer-bridge
+
   security-health-check:
     name: Security Health Check
     runs-on: ubuntu-latest
-    needs: [scanner-engine, anomaly-detector, audit-trail]
+    needs: [scanner-engine, anomaly-detector, audit-trail, atomic-rpc-relayer-bridge]
     steps:
       - uses: actions/checkout@v4
 

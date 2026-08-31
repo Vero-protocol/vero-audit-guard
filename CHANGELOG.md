@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Security
+- Prevent duplicate state-changing RPC submissions by requiring explicit idempotency before retries or cross-verification; add canonical projected quorum verification with distinct unavailable and failed outcomes (#348).
+- Added fail-closed audit report verification against exact Stellar transactions, trusted anchor accounts, and full SHA-256 `MEMO_HASH` values, with explicit legacy support (#306).
+- Fail closed when OPA policy evaluation crashes or times out instead of silently using the weaker TypeScript fallback (#301).
+### Fixed
+- Restore bridge startup while preserving secure-by-default atomic verification, with an explicit validated opt-out and warning (follow-up to #321).
+- Make anomaly-detector nonce-db read-modify-write atomic and lock-protected so concurrent writers cannot clobber state (#307).
+
+### Security
+- Hardened atomic RPC relayer URL construction so request endpoints must resolve to the configured RPC origin.
 
 ### Added
 - Added `.github/CODEOWNERS` mapping each sub-package path to responsible reviewers so GitHub automatically routes review requests on every PR.

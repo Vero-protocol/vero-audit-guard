@@ -1,6 +1,7 @@
 [package]
 name = "vero-scanner-engine"
 version = "0.1.0"
+license = "MIT"
 edition = "2021"
 
 [dependencies]
@@ -16,7 +17,7 @@ audit_guard = { package = "audit-guard", path = "../src/audit-guard" }
 
 # RUSTSEC-2026-0204: pin crossbeam-epoch away from vulnerable 0.9.18;
 # rayon pulls this in transitively via rayon-core -> crossbeam-deque.
-crossbeam-epoch = "0.9.20"
+crossbeam-epoch = ">=0.9.20"
 
 [[bin]]
 name = "scanner"

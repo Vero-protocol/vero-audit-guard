@@ -279,6 +279,17 @@ mod tests {
     }
 
     #[test]
+    fn scan_returns_no_findings_for_non_matching_content() {
+        let source = r#"
+            pub fn safe_operation() {
+                let a = 1;
+            }
+        "#;
+        let findings = scan_multisig_governance(source, "treasury.rs").unwrap();
+        assert!(findings.is_empty(), "expected no findings for safe non-matching code");
+    }
+
+    #[test]
     fn scan_handles_empty_content_error() {
         let result = scan_multisig_governance("", "treasury.rs");
         assert!(result.is_err());

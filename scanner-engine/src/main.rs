@@ -8,7 +8,6 @@ use std::{
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
-use thiserror::Error;
 use walkdir::WalkDir;
 
 mod multisig_scanner;
@@ -30,30 +29,6 @@ struct ScanReport {
     findings: Vec<Finding>,
     governance_findings: Vec<GovernanceFinding>,
     report_hash: String,
-}
-
-/// Structured error type for all scanner-engine failure modes.
-/// Each variant maps to a distinct exit code and stderr format string.
-#[derive(Debug, Error)]
-pub enum ScannerError {
-    #[error("io error: {path}: {source}")]
-    IoError {
-        path: String,
-        #[source]
-        source: std::io::Error,
-    },
-    #[error("serialization failed: {0}")]
-    SerializationError(#[source] serde_json::Error),
-    #[error("report write failed: {path}: {source}")]
-    ReportWriteError {
-        path: String,
-        #[source]
-        source: std::io::Error,
-    },
-    #[error("invalid target: {path}: {reason}")]
-    InvalidTarget { path: String, reason: String },
-    #[error("report integrity check failed")]
-    IntegrityCheckFailed,
 }
 
 /// Static analysis rules applied to Soroban/Rust contract source files.
@@ -105,12 +80,7 @@ fn scan_file(path: &Path, rules: &[CompiledRule]) -> (bool, Vec<Finding>) {
     let mut findings = Vec::new();
 
     for (lineno, line) in content.lines().enumerate() {
-        // Skip scanning lines that appear to be part of the scanner's own test suite
-        // to avoid false positives when the scanner analyzes its own source code.
-        if line.contains("fs::write(dir.join") {
-            continue;
-        }
-
+        // No line-level substring skips — every rule is applied to every line.
         for rule in rules {
             if rule.regex.is_match(line) {
                 findings.push(Finding {
@@ -126,11 +96,20 @@ fn scan_file(path: &Path, rules: &[CompiledRule]) -> (bool, Vec<Finding>) {
     (true, findings)
 }
 
+/// True when a path component is a conventional test directory name.
+fn is_test_path(path: &Path) -> bool {
+    path.components().any(|c| {
+        let s = c.as_os_str().to_string_lossy();
+        s == "tests" || s == "test" || s == "__tests__"
+    })
+}
+
 fn rust_source_files(target: &str) -> Vec<PathBuf> {
     WalkDir::new(target)
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| e.path().extension().map(|x| x == "rs").unwrap_or(false))
+        .filter(|e| !is_test_path(e.path()))
         .map(|e| e.into_path())
         .collect()
 }
@@ -185,10 +164,6 @@ fn sha256_of(data: &str) -> String {
     hex::encode(hasher.finalize())
 }
 
-/// Builds a unique, monotonically-distinct nullifier for a single scan
-/// lifecycle run, binding the report hash to a nanosecond timestamp so that
-/// two runs producing an identical report are still treated as distinct
-/// state transitions.
 fn scan_nullifier(report_hash: &str) -> String {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -197,10 +172,6 @@ fn scan_nullifier(report_hash: &str) -> String {
     format!("{report_hash}-{nanos}")
 }
 
-/// Runs the ZK-based state validation hook over a completed scan lifecycle,
-/// verifying that the pre-scan state (the scan target) transitioned into the
-/// post-scan state (the generated report) via a well-formed, non-replayed
-/// proof before the report is trusted downstream.
 fn verify_scan_state_transition(
     hook: &mut ZkStateValidationHook,
     pre_state_root: &str,
@@ -221,16 +192,6 @@ fn main() {
     let (file_count, all_findings) = scan_target(&target, &rules);
     let governance_findings = scan_governance_target(&target);
 
-    // Serialize findings — exit 2 on failure, nothing written to stdout
-    let report_json = match serde_json::to_string_pretty(&all_findings) {
-        Ok(json) => json,
-        Err(e) => {
-            eprintln!("[scanner] ERROR: serialization failed: {}", e);
-            std::process::exit(2);
-        }
-    };
-    let hash = sha256_of(&report_json);
-
     let combined_report = ScanReport {
         target: target.clone(),
         total_files: file_count,
@@ -239,7 +200,13 @@ fn main() {
         report_hash: String::new(),
     };
 
-    let report_json = serde_json::to_string_pretty(&combined_report).unwrap();
+    let report_json = match serde_json::to_string_pretty(&combined_report) {
+        Ok(json) => json,
+        Err(e) => {
+            eprintln!("[scanner] ERROR: serialization failed: {}", e);
+            std::process::exit(2);
+        }
+    };
     let hash = sha256_of(&report_json);
 
     let report = ScanReport {
@@ -250,9 +217,6 @@ fn main() {
         report_hash: hash.clone(),
     };
 
-    // ZK-based state validation hook: verify the scan target (pre-state)
-    // transitioned into the generated report (post-state) via a well-formed,
-    // non-replayed proof before the report is trusted downstream.
     let nullifier = scan_nullifier(&report.report_hash);
     let mut zk_hook = ZkStateValidationHook::new();
     if let Err(e) =
@@ -263,10 +227,15 @@ fn main() {
     }
     eprintln!("[scanner] ZK state validation hook passed — scan state transition verified.");
 
-    let out = serde_json::to_string_pretty(&report).unwrap();
+    let out = match serde_json::to_string_pretty(&report) {
+        Ok(json) => json,
+        Err(e) => {
+            eprintln!("[scanner] ERROR: serialization failed: {}", e);
+            std::process::exit(2);
+        }
+    };
     println!("{}", out);
 
-    // Write report to /reports directory — exit 3 on failure
     let root_dir = match env::current_dir() {
         Ok(d) => d,
         Err(e) => {
@@ -297,11 +266,37 @@ fn main() {
     }
     eprintln!("[scanner] Report written to {}", report_path.display());
     eprintln!("[scanner] Report SHA-256: {}", report.report_hash);
-    eprintln!("[scanner] Governance findings: {}", report.governance_findings.len());
+    eprintln!(
+        "[scanner] Governance findings: {}",
+        report.governance_findings.len()
+    );
 
-    // CRITICAL findings check — exit 1
-    if report.findings.iter().any(|f| f.severity == "CRITICAL") {
+    let critical_findings: Vec<&Finding> = report
+        .findings
+        .iter()
+        .filter(|f| f.severity == "CRITICAL")
+        .collect();
+
+    let critical_governance: Vec<&GovernanceFinding> = report
+        .governance_findings
+        .iter()
+        .filter(|f| f.severity == "CRITICAL")
+        .collect();
+
+    if !critical_findings.is_empty() || !critical_governance.is_empty() {
         eprintln!("[scanner] CRITICAL findings detected — failing build.");
+        for f in &critical_findings {
+            eprintln!(
+                "[scanner] Blocking finding: [{}] {}:{} — {}",
+                f.severity, f.file, f.line, f.rule
+            );
+        }
+        for f in &critical_governance {
+            eprintln!(
+                "[scanner] Blocking governance finding: [{}] {}:{} — {}",
+                f.severity, f.file, f.line, f.rule
+            );
+        }
         std::process::exit(1);
     }
 
@@ -349,12 +344,103 @@ mod tests {
     }
 
     #[test]
+    fn line_with_unsafe_and_fs_write_substring_still_reports_unsafe_block() {
+        let dir = temp_scan_dir();
+        fs::write(
+            dir.join("evil.rs"),
+            "fn x() { unsafe { transmute(x) } // fs::write(dir.join\n}\n",
+        )
+        .expect("evil.rs should be written");
+
+        let rules = compile_rules(RULES);
+        let target = dir.to_string_lossy();
+        let (_count, findings) = scan_target(&target, &rules);
+
+        assert!(
+            findings.iter().any(|f| f.rule == "UNSAFE_BLOCK"),
+            "expected UNSAFE_BLOCK even when line contains fs::write(dir.join, got: {:?}",
+            findings
+        );
+
+        fs::remove_dir_all(dir).expect("test directory should be removed");
+    }
+
+    #[test]
+    fn files_under_tests_directory_are_not_scanned() {
+        let dir = temp_scan_dir();
+        let tests_dir = dir.join("tests");
+        fs::create_dir_all(&tests_dir).expect("tests dir");
+        fs::write(tests_dir.join("fixture.rs"), "fn t() { unsafe { } }\n")
+            .expect("fixture");
+        fs::write(dir.join("prod.rs"), "fn p() { unwrap(); }\n").expect("prod");
+
+        let rules = compile_rules(RULES);
+        let target = dir.to_string_lossy();
+        let (file_count, findings) = scan_target(&target, &rules);
+
+        assert_eq!(file_count, 1, "only prod.rs should be scanned");
+        assert!(findings.iter().any(|f| f.rule == "UNSAFE_UNWRAP"));
+        assert!(
+            !findings.iter().any(|f| f.file.contains("fixture.rs")),
+            "tests/ fixtures must not produce findings"
+        );
+
+        fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[test]
+    fn scan_governance_target_detects_critical_single_sig_withdrawal() {
+        let dir = temp_scan_dir();
+        fs::write(
+            dir.join("treasury.rs"),
+            "pub fn withdraw(env: Env) { token::transfer(env, amount); }\n",
+        )
+        .expect("treasury.rs should be written");
+
+        let target = dir.to_string_lossy();
+        let findings = scan_governance_target(&target);
+
+        assert!(
+            findings.iter().any(|f| {
+                f.rule == "UNSAFE_SINGLE_SIG_WITHDRAWAL" && f.severity == "CRITICAL"
+            }),
+            "expected a CRITICAL UNSAFE_SINGLE_SIG_WITHDRAWAL governance finding, got: {:?}",
+            findings
+        );
+
+        fs::remove_dir_all(dir).expect("test directory should be removed");
+    }
+
+    #[test]
+    fn scan_governance_target_returns_no_critical_for_safe_code() {
+        let dir = temp_scan_dir();
+        fs::write(
+            dir.join("safe.rs"),
+            "pub fn execute_proposal(env: Env) { require!(signers.len() >= threshold); }\n",
+        )
+        .expect("safe.rs should be written");
+
+        let target = dir.to_string_lossy();
+        let findings = scan_governance_target(&target);
+
+        assert!(
+            !findings.iter().any(|f| f.severity == "CRITICAL"),
+            "expected no CRITICAL governance findings for safe code, got: {:?}",
+            findings
+        );
+
+        fs::remove_dir_all(dir).expect("test directory should be removed");
+    }
+
+    #[test]
     fn scan_state_transition_is_verified_for_a_normal_run() {
         let pre = sha256_of("../vero-core-contracts");
         let post = sha256_of("[]");
         let mut hook = ZkStateValidationHook::new();
 
-        assert!(verify_scan_state_transition(&mut hook, &pre, &post, &scan_nullifier(&post)).is_ok());
+        assert!(
+            verify_scan_state_transition(&mut hook, &pre, &post, &scan_nullifier(&post)).is_ok()
+        );
     }
 
     #[test]
@@ -365,8 +451,6 @@ mod tests {
         let mut hook = ZkStateValidationHook::new();
         let nullifier = scan_nullifier(&post);
 
-        // Build the proof against the real post-state, then swap in a
-        // tampered post-state root so the commitment no longer matches.
         let mut proof = StateTransitionProof::new(pre, post, nullifier);
         proof.post_state_root = tampered_post;
 
@@ -400,4 +484,4 @@ mod tests {
             Err(ZkStateError::NoOpTransition)
         );
     }
-}
+                }

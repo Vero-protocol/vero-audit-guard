@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use reqwest::{Client, StatusCode, Url};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+
 pub mod drift_validator;
 pub mod drift_error;
 pub mod write_path;
@@ -214,7 +215,6 @@ impl AuditReport {
         if self.policy_name.trim().is_empty() {
             return Err(AuditGuardError::EmptyPolicyName);
         }
-
         if !self.policy_name.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
             return Err(AuditGuardError::InvalidPolicyName(self.policy_name.clone()));
         }
@@ -368,6 +368,7 @@ impl AuditGuardClient {
             .map_err(|error| AuditGuardError::InvalidEndpoint(error.to_string()))
     }
 
+    /// Creates a new AuditGuardClient and validates the URL immediately
     pub fn new_validated(api_url: &str) -> Result<Self, AuditGuardError> {
         validate_url(api_url)?;
         let parsed = Url::parse(api_url)
@@ -751,6 +752,9 @@ impl ScheduledTreasuryOutflow {
         };
     }
 }
+
+#[cfg(test)]
+mod drift_validator_test;
 
 #[cfg(test)]
 mod tests {

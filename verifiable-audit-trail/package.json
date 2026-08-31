@@ -1,6 +1,7 @@
 {
   "name": "vero-audit-trail",
   "version": "0.1.0",
+  "license": "MIT",
   "description": "Stores cryptographic hashes of audit reports on the Stellar/Soroban chain",
   "main": "dist/index.js",
   "scripts": {

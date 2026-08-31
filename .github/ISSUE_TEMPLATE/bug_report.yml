@@ -1,0 +1,119 @@
+name: 🐛 Bug Report
+description: Report a bug in the Vero Audit Guard
+title: "[Bug]: "
+labels: ["bug", "needs-triage"]
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## 🐛 Bug Report
+        Thank you for taking the time to report a bug. Please fill out the information below to help us investigate.
+
+  - type: input
+    id: summary
+    attributes:
+      label: Summary
+      description: Provide a brief summary of the issue
+      placeholder: "e.g., Audit verification fails when checking large contracts"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      description: How severe is this issue?
+      options:
+        - Critical (System down / security issue)
+        - High (Major feature broken)
+        - Medium (Feature partially broken)
+        - Low (Minor issue / UX)
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps-to-reproduce
+    attributes:
+      label: Steps to Reproduce
+      description: Describe the steps to reproduce the bug
+      placeholder: |
+        1. Go to '...'
+        2. Click on '...'
+        3. Scroll down to '...'
+        4. See error
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected-behavior
+    attributes:
+      label: Expected Behavior
+      description: What did you expect to happen?
+      placeholder: "The audit verification should complete successfully"
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual-behavior
+    attributes:
+      label: Actual Behavior
+      description: What actually happened?
+      placeholder: "The audit verification failed with an error"
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant Logs / Error Output
+      description: Please copy and paste any relevant logs or error messages
+      render: shell
+      placeholder: |
+        Error: ...
+        Stack trace: ...
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: What version of vero-audit-guard are you using?
+      placeholder: "v0.1.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Environment
+      description: Where are you running the audit guard?
+      options:
+        - Local Development
+        - Staging
+        - Production
+        - CI/CD Pipeline
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating System
+      description: What OS are you using?
+      placeholder: "Ubuntu 22.04 / macOS 14.0 / Windows 11"
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional Context
+      description: Any other information that might be helpful
+      placeholder: "This might be related to the recent contract update..."
+
+  - type: markdown
+    attributes:
+      value: |
+        ---
+        **If you pick this issue up:** the pull request that closes it needs a
+        **detailed description** — what was wrong, the approach you took, anything
+        the reviewer should look at closely, and how you verified it. A one-line
+        description will be sent back before review. See CONTRIBUTING.md.

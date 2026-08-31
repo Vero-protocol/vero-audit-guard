@@ -668,4 +668,99 @@ Updated CHANGELOG.md with new feature.
       );
     });
   });
+  describe("OPA fail-closed behavior (Issue #301)", () => {
+    it("does not silently fall back when OPA evaluation throws", async () => {
+      (engine as any).opaAvailable = true;
+  
+      const opaSpy = jest
+        .spyOn(engine as any, "evaluateWithOPA")
+        .mockRejectedValue(new Error("OPA crashed"));
+      const fallbackSpy = jest.spyOn(engine as any, "evaluateWithoutOPA");
+  
+      const prData: PRData = signPRData(
+        {
+          pull_request: {
+            title: "Implement new security feature for audit trail",
+            body: "This PR implements a new feature. Tested thoroughly. Changelog updated.",
+            labels: ["security", "trivial"],
+            base_branch: "develop",
+            head_branch: "feature/security",
+            number: 42,
+            author: "test-user",
+          },
+          files_modified: ["src/test.ts"],
+          additions: 50,
+          deletions: 10,
+        },
+        authorizedRelayer,
+        Date.now()
+      );
+  
+      const result = await engine.evaluate(prData);
+  
+      expect(result.status).toBe("NON_COMPLIANT");
+      expect(
+        result.violations.some((v) => v.rule === "OPA_EVALUATION_FAILED")
+      ).toBe(true);
+      expect(result.violations[0].severity).toBe("CRITICAL");
+      expect(fallbackSpy).not.toHaveBeenCalled();
+  
+      opaSpy.mockRestore();
+      fallbackSpy.mockRestore();
+    });
+  
+    it("passes an explicit timeout to opa eval execSync", async () => {
+      const childProcess = require("child_process");
+      const execSpy = jest
+        .spyOn(childProcess, "execSync")
+        .mockImplementation((...args: unknown[]) => {
+          const cmd = String(args[0] ?? "");
+          if (cmd.startsWith("opa version")) {
+            return Buffer.from("Version: 0.60.0");
+          }
+          if (cmd.includes("opa eval")) {
+            const err: any = new Error("spawnSync opa ETIMEDOUT");
+            err.killed = true;
+            err.signal = "SIGTERM";
+            throw err;
+          }
+          return Buffer.from("");
+        });
+  
+      const timedEngine = new PolicyEngine();
+      (timedEngine as any).opaAvailable = true;
+  
+      const prData: PRData = signPRData(
+        {
+          pull_request: {
+            title: "Implement new security feature for audit trail",
+            body: "This PR implements a new feature. Tested thoroughly. Changelog updated.",
+            labels: ["security", "trivial"],
+            base_branch: "develop",
+            head_branch: "feature/security",
+            number: 43,
+            author: "test-user",
+          },
+          files_modified: ["src/test.ts"],
+          additions: 50,
+          deletions: 10,
+        },
+        authorizedRelayer,
+        Date.now()
+      );
+  
+      const result = await timedEngine.evaluate(prData);
+  
+      expect(result.status).toBe("NON_COMPLIANT");
+      expect(
+        result.violations.some((v) => v.rule === "OPA_EVALUATION_FAILED")
+      ).toBe(true);
+      expect(execSpy).toHaveBeenCalledWith(
+        expect.stringContaining("opa eval"),
+        expect.objectContaining({ timeout: expect.any(Number) })
+      );
+  
+      execSpy.mockRestore();
+    });
+  });
 });

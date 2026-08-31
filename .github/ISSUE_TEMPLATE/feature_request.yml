@@ -1,0 +1,96 @@
+name: 🚀 Feature Request
+description: Suggest a new feature or improvement
+title: "[Feature]: "
+labels: ["enhancement", "needs-triage"]
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## 🚀 Feature Request
+        Thank you for suggesting a new feature! Please describe the feature and why it would be valuable.
+
+  - type: input
+    id: title
+    attributes:
+      label: Feature Title
+      description: A clear and concise title for the feature
+      placeholder: "Add support for multi-contract audit verification"
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem Statement
+      description: What problem does this feature solve?
+      placeholder: |
+        Currently, users cannot verify multiple contracts in a single audit run.
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed Solution
+      description: Describe your proposed solution
+      placeholder: |
+        Add a batch verification endpoint that accepts a list of contract addresses.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternative Solutions
+      description: Describe any alternative solutions you've considered
+      placeholder: |
+        Users could run multiple verification jobs sequentially, but this is inefficient.
+
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Use Case
+      description: Who would benefit from this feature and how?
+      placeholder: |
+        Contract auditors who need to verify multiple contracts at once.
+    validations:
+      required: true
+
+  - type: textarea
+    id: implementation
+    attributes:
+      label: Implementation Ideas
+      description: Any ideas on how this could be implemented?
+      placeholder: |
+        This could be implemented as a new endpoint in the API.
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      description: How important is this feature to you?
+      options:
+        - Critical (Cannot work without this)
+        - High (Would be very valuable)
+        - Medium (Nice to have)
+        - Low (Only if time permits)
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional Context
+      description: Any other information that might be helpful
+      placeholder: |
+        I have a specific use case in mind...
+
+  - type: markdown
+    attributes:
+      value: |
+        ---
+        **If you pick this issue up:** the pull request that closes it needs a
+        **detailed description** — what was wrong, the approach you took, anything
+        the reviewer should look at closely, and how you verified it. A one-line
+        description will be sent back before review. See CONTRIBUTING.md.
