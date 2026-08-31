@@ -66,3 +66,12 @@ body:
       description: Are you willing to contribute this documentation change?
       options:
         - label: I am willing to contribute this change
+
+  - type: markdown
+    attributes:
+      value: |
+        ---
+        **If you pick this issue up:** the pull request that closes it needs a
+        **detailed description** — what was wrong, the approach you took, anything
+        the reviewer should look at closely, and how you verified it. A one-line
+        description will be sent back before review. See CONTRIBUTING.md.
