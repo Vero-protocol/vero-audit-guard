@@ -76,6 +76,7 @@ vero-audit-guard/
 │   └── src/main.rs
 ├── anomaly-detector/        # TypeScript relayer monitor
 │   ├── Dockerfile
+│   ├── README.md
 │   └── src/index.ts
 ├── atomic-rpc-relayer-bridge/  # Local RPC/metrics bridge
 │   ├── Dockerfile
@@ -92,6 +93,7 @@ vero-audit-guard/
 │   ├── policy-compliance.yml # OPA policy compliance checks
 │   └── anchor-on-merge.yml  # Anchors audit trail on merge to main
 ├── BUILD_GUARD.sh           # Local automation script
+├── CODE_OF_CONDUCT.md       # Contributor code of conduct
 ├── CONTRIBUTING.md          # Contributor + compose workflow
 ├── POLICY_AS_CODE.md        # Policy engine documentation
 ├── INCIDENT_RESPONSE.md     # Emergency runbook
@@ -201,6 +203,12 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the container topology and integratio
 > **Note on Atomic Verification (`DISABLE_ATOMIC_VERIFICATION`)**:
 > By default, the `atomic-rpc-relayer-bridge` requires majority verification for replay-safe requests. `POST`, `PUT`, and `DELETE` are submitted once and are not cross-verified unless the caller explicitly declares idempotency or provides an idempotency key. Setting this flag to `true` disables cross-endpoint verification, which trades response integrity for lower latency and higher availability.
 > The only accepted values are `true` and `false`; invalid values stop server initialization instead of silently changing the verification policy.
+
+---
+
+## Code of Conduct
+
+Please note that this project is released with a Contributor Code of Conduct. By participating in this project you agree to abide by its terms. See [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) for details.
 
 ---
 
