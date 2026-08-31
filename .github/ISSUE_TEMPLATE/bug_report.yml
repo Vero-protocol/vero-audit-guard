@@ -108,3 +108,12 @@ body:
       label: Additional Context
       description: Any other information that might be helpful
       placeholder: "This might be related to the recent contract update..."
+
+  - type: markdown
+    attributes:
+      value: |
+        ---
+        **If you pick this issue up:** the pull request that closes it needs a
+        **detailed description** — what was wrong, the approach you took, anything
+        the reviewer should look at closely, and how you verified it. A one-line
+        description will be sent back before review. See CONTRIBUTING.md.
